@@ -38,10 +38,10 @@ class RegionalExtremes:
 class ClimaticRegionalExtremes(RegionalExtremes):
     def __init__(
         self,
-        # filepath: Union[Path, str],
-        # isclimatic: bool,
+        filepath: Union[Path, str],
     ):
         self.filepath = climatic_data_filepath
+        self.data = None
 
     def load_data(self):
         # Load the PEI-* drought indices
