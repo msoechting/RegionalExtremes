@@ -3,25 +3,31 @@ import random
 import datetime
 from sklearn.decomposition import PCA
 
-# import Path
-# import Union
+from pathlib import Path
+from typing import Union
+import time
 
-climatic_data_filepath = (
-    "/Net/Groups/BGI/scratch/mweynants/DeepExtremes/v3/PEICube.zarr"
-)
+CLIMATIC_FILEPATH = "/Net/Groups/BGI/scratch/mweynants/DeepExtremes/v3/PEICube.zarr"
 
 
 class RegionalExtremes:
+    def __init__(
+        self,
+        filepath: Union[Path, str],
+    ):
+        self.filepath = filepath
+        self.data = None
+
     def load_data(self):
-        """Load the dataset. To be implemented by subclasses."""
-        raise NotImplementedError("Subclasses should implement this method")
+        # Load the PEI-* drought indices
+        self.data = xr.open_zarr(self.filepath)
 
     def randomly_select_samples(self, n_samples=10):
         # Select randomly n_samples to train the PCA:
-        lat_indices = random.choices(ds_pei.latitude.values, k=1000)
-        lon_indices = random.choices(ds_pei.longitude.values, k=1000)
+        lat_indices = random.choices(self.data.latitude.values, k=1000)
+        lon_indices = random.choices(self.data.longitude.values, k=1000)
 
-        ds_pei = ds_pei.sel(latitude=lat_indices, longitude=lon_indices)
+        self.data = self.data.sel(latitude=lat_indices, longitude=lon_indices)
 
     def compute_msc(self):
         for index in self.data.data_vars:
@@ -29,39 +35,35 @@ class RegionalExtremes:
                 self.data[index].groupby("time.dayofyear").mean("time")
             )
 
-    def perform_pca(self):
-        pca = PCA(n_components=5)
-        # pca.fit(self.data.msc_pei_30.isel(dayofyear=slice(1, 366, 5)))
-        raise NotImplementedError("Subclasses should implement this method")
+    # def perform_pca(self):
+    #    pca = PCA(n_components=5)
+    #    # pca.fit(self.data.msc_pei_30.isel(dayofyear=slice(1, 366, 5)))
+    #    raise NotImplementedError("Subclasses should implement this method")
 
 
 class ClimaticRegionalExtremes(RegionalExtremes):
     def __init__(
         self,
-        filepath: Union[Path, str],
     ):
-        self.filepath = climatic_data_filepath
+        self.filepath = CLIMATIC_FILEPATH
         self.data = None
 
-    def load_data(self):
-        # Load the PEI-* drought indices
-        ds = xr.open_zarr(self.filepath)
-
+    def apply_transformations(self):
         # Transform the longitude coordinates to -180 and 180
         def coordstolongitude(x):
             return ((x + 180) % 360) - 180
 
-        dsc = ds.roll(longitude=180 * 4, roll_coords=True)
+        dsc = self.data.roll(longitude=180 * 4, roll_coords=True)
         ds_pei = dsc.assign_coords(longitude=coordstolongitude(dsc.longitude))
-
-        # Remove the year 1950 because the data are inconsistent
-        ds_pei = ds_pei.sel(
-            time=slice(datetime.date(1951, 1, 1), datetime.date(2022, 12, 31))
-        )
 
         # Stack the longitude and latitude dimensions into a new dimension called lonlat
         ds_pei = ds_pei.stack(lonlat=("longitude", "latitude")).transpose(
             "lonlat", "time", ...
+        )
+
+        # Remove the year 1950 because the data are inconsistent
+        ds_pei = ds_pei.sel(
+            time=slice(datetime.date(1951, 1, 1), datetime.date(2030, 12, 31))
         )
 
         self.data = ds_pei
@@ -78,7 +80,7 @@ class EcologicalRegionalExtremes(RegionalExtremes):
         self.filepath = f"/Net/Groups/BGI/work_1/scratch/fluxcom/upscaling_inputs/MODIS_VI_perRegion061/{vegetation_index}/Groups_dyn_{vegetation_index}_MSC_snowfrac.zarr"
         self.filename = f"Groups_dyn_{vegetation_index}_MSC_snowfrac"
 
-    def load_data(self):
+    def apply_transformations(self):
         # Load the MSC of MODIS
         ds = xr.open_zarr(self.filepath, consolidated=False)
         ds_msc = ds[self.filename].stack(
@@ -93,9 +95,17 @@ class EcologicalRegionalExtremes(RegionalExtremes):
         return
 
 
-# For climatic data
-climatic_processor = ClimaticRegionalExtremes()
-climatic_processor.load_data()
-climatic_processor.compute_msc()
-climatic_processor.perform_pca()
-climatic_processor.compute_box_plot()
+if __name__ == "__main__":
+    # For climatic data
+    t0 = time.time()
+    climatic_processor = ClimaticRegionalExtremes()
+    t1 = time.time()
+    climatic_processor.load_data()
+    t2 = time.time()
+    print(t2 - t1)
+    climatic_processor.apply_transformations()
+    t3 = time.time()
+    print(t3 - t2)
+    # climatic_processor.compute_msc()
+    # climatic_processor.perform_pca()
+    # climatic_processor.compute_box_plot()
