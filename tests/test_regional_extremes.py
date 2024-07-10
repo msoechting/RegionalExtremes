@@ -5,6 +5,7 @@ from unittest.mock import patch, MagicMock
 import xarray as xr
 import numpy as np
 import datetime
+import pytest
 
 # Add the project root to the Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))

@@ -14,41 +14,82 @@ class RegionalExtremes:
     def __init__(
         self,
         filepath: Union[Path, str],
+        index: str,
     ):
         self.filepath = filepath
+        self.index = index
         self.data = None
 
     def load_data(self):
         # Load the PEI-* drought indices
-        self.data = xr.open_zarr(self.filepath)
+        self.data = xr.open_zarr(self.filepath)[[self.index]]
 
-    def randomly_select_samples(self, n_samples=10):
+    def apply_transformations(self):
+        raise NotImplementedError("Subclasses should implement this method")
+
+    def perform_pca_on_the_msc(self, n_samples=10, n_components=3, step_msc=5):
+        """perform a PCA on the MSC of n samples. Each time step of the msc is considered as an independent component. nb of time_step used for the PCA computation = 366 / step_msc.
+
+        Args:
+            n_samples (int, optional): number of samples to fit the PCA. Defaults to 10.
+            n_components (int, optional): number of components to compute the PCA. Defaults to 3.
+            step_msc (int, optional): temporal resolution of the msc, to reduce computationnal workload. Defaults to 5.
+        """
+        assert (n_samples > 0) & (n_samples <= self.data.dims["lonlat"])
+        assert (n_components > 0) & (
+            n_components <= 366
+        ), "n_components have to be in the range of days of a years"
+        assert (step_msc > 0) & (
+            step_msc <= 366
+        ), "step_msc have to be in the range of days of a years."
+
         # Select randomly n_samples to train the PCA:
-        lat_indices = random.choices(self.data.latitude.values, k=1000)
-        lon_indices = random.choices(self.data.longitude.values, k=1000)
+        # TODO for elecological, select valid values
+        lonlat_indices = random.choices(self.data.lonlat.values, k=n_samples)
+        selected_data = self.data.sel(lonlat=lonlat_indices)
 
-        self.data = self.data.sel(latitude=lat_indices, longitude=lon_indices)
+        # Compute the MSC
+        selected_data["msc"] = (
+            selected_data[self.index].groupby("time.dayofyear").mean("time")
+        )
+        # Compute the PCA
+        pca = PCA(n_components=n_components)
+        pca.fit(selected_data.msc.isel(dayofyear=slice(1, 366, 5)).values)
+        print(
+            f"PCA performed. sum explained variance: {sum(pca.explained_variance_ratio_)}"
+        )
 
-    def compute_msc(self):
-        for index in self.data.data_vars:
-            self.data[f"msc_{index}"] = (
-                self.data[index].groupby("time.dayofyear").mean("time")
-            )
 
-    # def perform_pca(self):
-    #    pca = PCA(n_components=5)
-    #    # pca.fit(self.data.msc_pei_30.isel(dayofyear=slice(1, 366, 5)))
-    #    raise NotImplementedError("Subclasses should implement this method")
+#    def project_pca(self):
+#        self.data
+#        # Compute the MSC
+#        selected_data["msc"] = (
+#            selected_data[self.index].groupby("time.dayofyear").mean("time")
+#        )
+#        return
 
 
 class ClimaticRegionalExtremes(RegionalExtremes):
-    def __init__(
-        self,
-    ):
+    def __init__(self, index):
+        assert index in [
+            "pei_30",
+            "pei_90",
+            "pei_180",
+        ], "index unavailable. Index available:'pei_30', 'pei_90', 'pei_180'."
         self.filepath = CLIMATIC_FILEPATH
+        self.index = index
         self.data = None
 
     def apply_transformations(self):
+        assert self.data is not None
+        # Assert dimensions are as expected after loading and transformation
+        assert all(
+            dim in self.data.dims for dim in ("time", "latitude", "longitude")
+        ), "Dimension missing"
+        assert (
+            (self.data.longitude >= 0) & (self.data.longitude <= 360)
+        ).all(), "This function transform longitude values from 0, 360 to the range -180 to 180"
+
         # Transform the longitude coordinates to -180 and 180
         def coordstolongitude(x):
             return ((x + 180) % 360) - 180
@@ -98,7 +139,7 @@ class EcologicalRegionalExtremes(RegionalExtremes):
 if __name__ == "__main__":
     # For climatic data
     t0 = time.time()
-    climatic_processor = ClimaticRegionalExtremes()
+    climatic_processor = ClimaticRegionalExtremes(index="pei_180")
     t1 = time.time()
     climatic_processor.load_data()
     t2 = time.time()
@@ -106,6 +147,8 @@ if __name__ == "__main__":
     climatic_processor.apply_transformations()
     t3 = time.time()
     print(t3 - t2)
-    # climatic_processor.compute_msc()
-    # climatic_processor.perform_pca()
+    climatic_processor.perform_pca_on_the_msc(n_samples=10, n_components=3)
+    t5 = time.time()
+    print(t5 - t3)
+
     # climatic_processor.compute_box_plot()
