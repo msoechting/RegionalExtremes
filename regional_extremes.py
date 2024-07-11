@@ -1,4 +1,5 @@
 import xarray as xr
+import numpy as np
 import random
 import datetime
 from sklearn.decomposition import PCA
@@ -11,14 +12,23 @@ CLIMATIC_FILEPATH = "/Net/Groups/BGI/scratch/mweynants/DeepExtremes/v3/PEICube.z
 
 
 class RegionalExtremes:
-    def __init__(
-        self,
-        filepath: Union[Path, str],
-        index: str,
-    ):
+    def __init__(self, filepath: Union[Path, str], index: str, step_msc):
+        """Base Class to compute regional extremes.
+
+        Args:
+            filepath (Union[Path, str]): filepath to load the data
+            index (str): vegetation index or climatic index. Variable used to define the extreme.
+            step_msc (_type_): temporal resolution of the mean seasonal cycle. nb of points = 366 / step_msc
+        """
+
         self.filepath = filepath
         self.index = index
+        self.step_msc = step_msc
         self.data = None
+
+        self.min_data = None
+        self.max_data = None
+        self.pca = None
 
     def load_data(self):
         # Load the PEI-* drought indices
@@ -27,58 +37,138 @@ class RegionalExtremes:
     def apply_transformations(self):
         raise NotImplementedError("Subclasses should implement this method")
 
-    def perform_pca_on_the_msc(self, n_samples=10, n_components=3, step_msc=5):
-        """perform a PCA on the MSC of n samples. Each time step of the msc is considered as an independent component. nb of time_step used for the PCA computation = 366 / step_msc.
+    def compute_and_scale_the_msc(self, n_samples=10, step_msc=5):
+        """compute the MSC of n samples and scale it between 0 and 1. Each time step of the msc is considered as an independent component. nb of time_step used for the PCA computation = 366 / step_msc.
 
         Args:
             n_samples (int, optional): number of samples to fit the PCA. Defaults to 10.
             n_components (int, optional): number of components to compute the PCA. Defaults to 3.
             step_msc (int, optional): temporal resolution of the msc, to reduce computationnal workload. Defaults to 5.
         """
-        assert (n_samples > 0) & (n_samples <= self.data.dims["lonlat"])
-        assert (n_components > 0) & (
-            n_components <= 366
-        ), "n_components have to be in the range of days of a years"
-        assert (step_msc > 0) & (
-            step_msc <= 366
-        ), "step_msc have to be in the range of days of a years."
-
+        assert (n_samples > 0) & (
+            n_samples
+            <= self.data.sizes[
+                "lonlat"
+            ]  # self.data.sizes["longitude"] * self.data.sizes["latitude"]
+        )
         # Select randomly n_samples to train the PCA:
         # TODO for elecological, select valid values
-        lonlat_indices = random.choices(self.data.lonlat.values, k=n_samples)
-        selected_data = self.data.sel(lonlat=lonlat_indices)
+        if n_samples is not None:
+            lonlat_indices = random.choices(self.data.lonlat.values, k=n_samples)
+            selected_data = self.data.sel(lonlat=lonlat_indices)
+        else:
+            selected_data = self.data
 
         # Compute the MSC
         selected_data["msc"] = (
-            selected_data[self.index].groupby("time.dayofyear").mean("time")
+            selected_data[self.index]
+            .groupby("time.dayofyear")
+            .mean("time")
+            .drop_vars(["lonlat", "longitude", "latitude"])
         )
+
+        # reduce the temporal resolution
+        msc_small = selected_data["msc"].isel(dayofyear=slice(1, 366, step_msc))
+
+        # Scale the data between 0 and 1
+        # if (self.max_data and self.min_data) is None:
+        #     self.max_data = self.data[self.index].max().values
+        #     self.min_data = self.data[self.index].min().values
+        # scaled_data =  (self.min_data - msc_small) / (self.max_data - self.min_data)
+        return msc_small  # scaled_data
+
+    def compute_pca_and_transform(
+        self,
+        n_samples=10,
+        n_components=3,
+    ):
+        """compute the principal component analysis (PCA) on the mean seasonal cycle (MSC) of n samples and scale it between 0 and 1. Each time step of the msc is considered as an independent component. nb of time_step used for the PCA computation = 366 / step_msc.
+
+        Args:
+            n_samples (int, optional): number of samples to fit the PCA. Defaults to 10.
+            n_components (int, optional): number of components to compute the PCA. Defaults to 3.
+            step_msc (int, optional): temporal resolution of the msc, to reduce computationnal workload. Defaults to 5.
+        """
+        assert (n_samples > 0) & (
+            n_samples
+            <= self.data.sizes["lonlat"]  # gitude"] * self.data.sizes["latitude"]
+        )
+        assert (n_components > 0) & (
+            n_components <= 366
+        ), "n_components have to be in the range of days of a years"
+
+        # Scale the data between 0 and 1.
+        scaled_data = self.compute_and_scale_the_msc(
+            n_samples=n_samples, step_msc=self.step_msc
+        )
+
         # Compute the PCA
-        pca = PCA(n_components=n_components)
-        pca.fit(selected_data.msc.isel(dayofyear=slice(1, 366, 5)).values)
+        self.pca = PCA(n_components=n_components)
+        self.pca.fit(scaled_data)
         print(
-            f"PCA performed. sum explained variance: {sum(pca.explained_variance_ratio_)}"
+            f"PCA performed. sum explained variance: {sum(self.pca.explained_variance_ratio_)}"
         )
 
+        # Each colomns give us the projection through 1 component.
+        pca_components = self.pca.transform(scaled_data)
+        return pca_components
 
-#    def project_pca(self):
-#        self.data
-#        # Compute the MSC
-#        selected_data["msc"] = (
-#            selected_data[self.index].groupby("time.dayofyear").mean("time")
-#        )
-#        return
+    def apply_pca(self, n_samples=None):
+        """Compute the mean seasonal cycle (MSC) of n samples and scale it between 0 and 1. Then apply the PCA already fit on the new data.  Each time step of the msc is considered as an independent component. Nb of time_step used for the PCA computation = 366 / step_msc.
+
+        Args:
+            n_samples (int, optional): number of samples to fit the PCA. Defaults to 10.
+            step_msc (int, optional): temporal resolution of the msc, to reduce computationnal workload. Defaults to 5.
+        """
+        scaled_data = self.compute_and_scale_the_msc(
+            n_samples=n_samples, step_msc=self.step_msc
+        )
+
+        X = self.pca.transform(scaled_data)
+        return X
+
+    def define_box(self, pca_components, n_bins=25):
+        n_components = pca_components.shape[1]
+
+        # We divide each component in n bins.
+        pca_bins = [
+            np.linspace(
+                np.min(pca_components[:, component]),
+                np.max(pca_components[:, component]),
+                n_bins + 1,
+            )
+            for component in range(n_components)
+        ]
+        return pca_bins
+
+    # Function to find the box for multiple points
+    def find_boxes(self, projected_data, pca_bins):
+        assert projected_data.shape[1] == len(pca_bins)
+
+        box_indices = np.zeros(
+            (projected_data.shape[0], projected_data.shape[1]), dtype=int
+        )
+        for i, pca_bin in enumerate(pca_bins):
+            box_indices[:, i] = np.digitize(projected_data[:, i], pca_bin)
+
+        return box_indices
 
 
 class ClimaticRegionalExtremes(RegionalExtremes):
-    def __init__(self, index):
+    def __init__(self, index, step_msc):
+        super().__init__(self, index, step_msc)
         assert index in [
             "pei_30",
             "pei_90",
             "pei_180",
         ], "index unavailable. Index available:'pei_30', 'pei_90', 'pei_180'."
+        assert (self.step_msc > 0) & (
+            self.step_msc <= 366
+        ), "step_msc have to be in the range of days of a years."
         self.filepath = CLIMATIC_FILEPATH
         self.index = index
-        self.data = None
+        self.step_msc = step_msc
+        # self.data = None
 
     def apply_transformations(self):
         assert self.data is not None
@@ -90,6 +180,11 @@ class ClimaticRegionalExtremes(RegionalExtremes):
             (self.data.longitude >= 0) & (self.data.longitude <= 360)
         ).all(), "This function transform longitude values from 0, 360 to the range -180 to 180"
 
+        # Remove the year 1950 because the data are inconsistent
+        self.data = self.data.sel(
+            time=slice(datetime.date(2017, 1, 1), datetime.date(2022, 12, 31))
+        )
+
         # Transform the longitude coordinates to -180 and 180
         def coordstolongitude(x):
             return ((x + 180) % 360) - 180
@@ -97,14 +192,8 @@ class ClimaticRegionalExtremes(RegionalExtremes):
         dsc = self.data.roll(longitude=180 * 4, roll_coords=True)
         ds_pei = dsc.assign_coords(longitude=coordstolongitude(dsc.longitude))
 
-        # Stack the longitude and latitude dimensions into a new dimension called lonlat
         ds_pei = ds_pei.stack(lonlat=("longitude", "latitude")).transpose(
             "lonlat", "time", ...
-        )
-
-        # Remove the year 1950 because the data are inconsistent
-        ds_pei = ds_pei.sel(
-            time=slice(datetime.date(1951, 1, 1), datetime.date(2030, 12, 31))
         )
 
         self.data = ds_pei
@@ -148,7 +237,10 @@ if __name__ == "__main__":
     t3 = time.time()
     print(t3 - t2)
     climatic_processor.perform_pca_on_the_msc(n_samples=10, n_components=3)
+    t4 = time.time()
+    print(t4 - t3)
+    climatic_processor.apply_pca(n_samples=20)
     t5 = time.time()
-    print(t5 - t3)
+    print(t5 - t4)
 
     # climatic_processor.compute_box_plot()
