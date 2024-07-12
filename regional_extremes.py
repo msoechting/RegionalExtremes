@@ -12,9 +12,15 @@ CLIMATIC_FILEPATH = "/Net/Groups/BGI/scratch/mweynants/DeepExtremes/v3/PEICube.z
 
 
 class RegionalExtremes:
-    def __init__(self, filepath: Union[Path, str], index: str, step_msc):
+    def __init__(
+        self,
+        filepath: Union[Path, str],
+        index: str,
+        step_msc,
+        n_components=3,
+        n_samples_training=100,
+    ):
         """Base Class to compute regional extremes.
-
         Args:
             filepath (Union[Path, str]): filepath to load the data
             index (str): vegetation index or climatic index. Variable used to define the extreme.
@@ -28,6 +34,8 @@ class RegionalExtremes:
 
         self.min_data = None
         self.max_data = None
+        self.n_samples_training = n_samples_training
+        self.n_components = n_components
         self.pca = None
 
     def load_data(self):
@@ -71,39 +79,29 @@ class RegionalExtremes:
         msc_small = selected_data["msc"].isel(dayofyear=slice(1, 366, step_msc))
 
         # Scale the data between 0 and 1
-        # if (self.max_data and self.min_data) is None:
-        #     self.max_data = self.data[self.index].max().values
-        #     self.min_data = self.data[self.index].min().values
-        # scaled_data =  (self.min_data - msc_small) / (self.max_data - self.min_data)
-        return msc_small  # scaled_data
+        if (self.max_data and self.min_data) is None:
+            self.max_data = self.data[self.index].max().values
+            self.min_data = self.data[self.index].min().values
+        scaled_data = (self.min_data - msc_small) / (self.max_data - self.min_data)
+        return scaled_data
 
     def compute_pca_and_transform(
         self,
-        n_samples=10,
-        n_components=3,
+        scaled_data,
     ):
         """compute the principal component analysis (PCA) on the mean seasonal cycle (MSC) of n samples and scale it between 0 and 1. Each time step of the msc is considered as an independent component. nb of time_step used for the PCA computation = 366 / step_msc.
 
         Args:
-            n_samples (int, optional): number of samples to fit the PCA. Defaults to 10.
             n_components (int, optional): number of components to compute the PCA. Defaults to 3.
             step_msc (int, optional): temporal resolution of the msc, to reduce computationnal workload. Defaults to 5.
         """
-        assert (n_samples > 0) & (
-            n_samples
-            <= self.data.sizes["lonlat"]  # gitude"] * self.data.sizes["latitude"]
-        )
-        assert (n_components > 0) & (
-            n_components <= 366
+        assert scaled_data.shape[1] < 366
+        assert (self.n_components > 0) & (
+            self.n_components <= 366
         ), "n_components have to be in the range of days of a years"
 
-        # Scale the data between 0 and 1.
-        scaled_data = self.compute_and_scale_the_msc(
-            n_samples=n_samples, step_msc=self.step_msc
-        )
-
         # Compute the PCA
-        self.pca = PCA(n_components=n_components)
+        self.pca = PCA(n_components=self.n_components)
         self.pca.fit(scaled_data)
         print(
             f"PCA performed. sum explained variance: {sum(self.pca.explained_variance_ratio_)}"
@@ -113,50 +111,63 @@ class RegionalExtremes:
         pca_components = self.pca.transform(scaled_data)
         return pca_components
 
-    def apply_pca(self, n_samples=None):
+    def apply_pca(self, scaled_data, n_samples=None):
         """Compute the mean seasonal cycle (MSC) of n samples and scale it between 0 and 1. Then apply the PCA already fit on the new data.  Each time step of the msc is considered as an independent component. Nb of time_step used for the PCA computation = 366 / step_msc.
 
         Args:
             n_samples (int, optional): number of samples to fit the PCA. Defaults to 10.
             step_msc (int, optional): temporal resolution of the msc, to reduce computationnal workload. Defaults to 5.
         """
-        scaled_data = self.compute_and_scale_the_msc(
-            n_samples=n_samples, step_msc=self.step_msc
-        )
-
         X = self.pca.transform(scaled_data)
         return X
 
-    def define_box(self, pca_components, n_bins=25):
-        n_components = pca_components.shape[1]
+    def define_limits_bins(self, projected_data, n_bins=25):
+        """
+            Define the bound of each bins on the projected data. The function
+            should be apply on the largest possible  amount of data to capture
+            the distribution in the projected space (especially minimum and maximum).
+            So ideally, fit the PCA with a subset of the data, then project the full dataset,
+            then define the bins on the full dataset projected.
+            n_bins is per components, so number of boxes = n_bins**n_components
+        Args:
+            projected_data (Xarray): Data projected after the PCA.
+            n_bins (int, optional): number of bins for each components. Defaults to 25.
 
-        # We divide each component in n bins.
-        pca_bins = [
+        Returns:
+            list of Xarray: list of array, where each array contains the boxes limits for each components.
+        """
+        assert projected_data.shape[1] == self.n_components
+
+        # Define n+1 bounds to divide each component in n bins,
+        # Then remove the first and last limits so that the box is not constrained at the extremities.
+        # This prevents defining later a new box for a sample that is more extreme in any of the components.
+        limits_bins = [
             np.linspace(
-                np.min(pca_components[:, component]),
-                np.max(pca_components[:, component]),
+                np.min(projected_data[:, component]),
+                np.max(projected_data[:, component]),
                 n_bins + 1,
-            )
-            for component in range(n_components)
+            )[1:-1]
+            for component in range(self.n_components)
         ]
-        return pca_bins
+        return limits_bins
 
     # Function to find the box for multiple points
-    def find_boxes(self, projected_data, pca_bins):
-        assert projected_data.shape[1] == len(pca_bins)
+    def find_bins(self, projected_data, limits_bins):
+
+        assert projected_data.shape[1] == len(limits_bins)
 
         box_indices = np.zeros(
             (projected_data.shape[0], projected_data.shape[1]), dtype=int
         )
-        for i, pca_bin in enumerate(pca_bins):
-            box_indices[:, i] = np.digitize(projected_data[:, i], pca_bin)
+        for i, limits_bin in enumerate(limits_bins):
+            box_indices[:, i] = np.digitize(projected_data[:, i], limits_bin)
 
         return box_indices
 
 
 class ClimaticRegionalExtremes(RegionalExtremes):
-    def __init__(self, index, step_msc):
-        super().__init__(self, index, step_msc)
+    def __init__(self, index, step_msc, n_components, n_samples_training):
+        super().__init__(self, index, step_msc, n_components, n_samples_training)
         assert index in [
             "pei_30",
             "pei_90",
@@ -168,6 +179,7 @@ class ClimaticRegionalExtremes(RegionalExtremes):
         self.filepath = CLIMATIC_FILEPATH
         self.index = index
         self.step_msc = step_msc
+        self.n_components = n_components
         # self.data = None
 
     def apply_transformations(self):

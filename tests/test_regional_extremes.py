@@ -17,7 +17,7 @@ from regional_extremes import RegionalExtremes, ClimaticRegionalExtremes
 
 class TestRegionalExtremes(unittest.TestCase):
     def setUp(self):
-        """Set up mock datasets for testing."""
+        #    """Set up mock datasets for testing."""
 
         # self.mock_climatic_dataset = lambda index, time: mock_climatic_dataset(
         #    index, time=time
@@ -89,7 +89,7 @@ class TestClimaticRegionalExtremes(TestRegionalExtremes):
         # Check the data is not empty
         self.assertIsNotNone(processor.data)
 
-    def test_apply_transformations_true_data(self):
+    def test_climatic_apply_transformations_true_data(self):
         processor = ClimaticRegionalExtremes()
         processor.load_data()
 
@@ -122,7 +122,7 @@ class TestClimaticRegionalExtremes(TestRegionalExtremes):
         self.assertIn("time", processor.data.dims)
         self.assertEqual(processor.data.dims["lonlat"], expected_len_lonlat)
 
-    def test_apply_transformations_mock_data(self):
+    def test_climatic_apply_transformations_mock_data(self):
         processor = ClimaticRegionalExtremes(index="pei_180")
         # Replace the data by the mock dataset
         processor.data = self.mock_climatic_dataset(index="pei_180")
@@ -173,8 +173,15 @@ class TestClimaticRegionalExtremes(TestRegionalExtremes):
         self.assertEqual(processor.data.dims["lonlat"], expected_len_lonlat)
         self.assertEqual(processor.data.dims["time"], len(expected_times))
 
-    def test_perform_pca_on_the_msc(self):
-        processor = ClimaticRegionalExtremes(index="pei_180", step_msc=5)
+    def test_compute_pca_and_transform_mock_data(self):
+        n_samples_training = 10
+        n_components = 3
+        processor = ClimaticRegionalExtremes(
+            index="pei_180",
+            step_msc=5,
+            n_samples_training=n_samples_training,
+            n_components=n_components,
+        )
         t1 = time.time()
         # Use the mock dataset
         dates = [
@@ -183,14 +190,92 @@ class TestClimaticRegionalExtremes(TestRegionalExtremes):
         ]
         dates = np.array(dates).astype("datetime64[ns]")
         processor.data = self.mock_climatic_dataset(index="pei_180", time=dates)
-        # processor.load_data()
 
         # Apply the transformations
         processor.apply_transformations()
-        # processor.compute_and_scale_the_msc()
-        pca_components = processor.compute_pca_and_transform()
-        pca_bins = processor.define_box(pca_components, n_bins=4)
-        boxes = processor.find_boxes(pca_components, pca_bins)
+
+        # Scale the data between 0 and 1.
+        scaled_data = processor.compute_and_scale_the_msc(n_samples=10)
+
+        self.assertTrue(
+            ((scaled_data >= -1) & (scaled_data <= 1)).all(),
+            "data are not scaled between 0 and 1.",
+        )
+        # Fit and apply the PCA
+        pca_components = processor.compute_pca_and_transform(scaled_data)
+        self.assertTrue(pca_components.shape[0] == n_samples_training)
+        self.assertTrue(pca_components.shape[1] == n_components)
+
+    def test_define_limits_bins_mock_data(self):
+        n_components = 3
+        n_samples = 30
+        n_bins = 4
+
+        # Range of the distribution of the mock dataset
+        random_low = 0
+        random_high = 5
+
+        # Generate mock data
+        mock_scaled_data = np.random.randint(
+            random_low, random_high, (n_samples, n_components)
+        )
+
+        processor = ClimaticRegionalExtremes(
+            index="pei_180",
+            step_msc=5,
+            n_samples_training=100,
+            n_components=n_components,
+        )
+        # Define box
+        limits_bins = processor.define_limits_bins(mock_scaled_data, n_bins=n_bins)
+
+        # Assert shapes
+        self.assertTrue(len(limits_bins) == n_components)
+        self.assertTrue(limits_bins[0].shape[0] == n_bins - 1)
+
+        # Assert values
+        for limits_bin in limits_bins:
+            self.assertTrue(
+                (limits_bin == np.array(range(random_low + 1, random_high - 1))).all()
+            )
+
+    def test_find_bins_mock_data(self):
+        n_components = 3
+        n_samples = 30
+        n_bins = 4
+
+        # Range of the distribution of the mock dataset
+        lower_value = 0
+        upper_value = 5
+
+        # Generate mock data
+        mock_data = np.random.randint(
+            lower_value, upper_value, (n_samples, n_components)
+        )
+
+        processor = ClimaticRegionalExtremes(
+            index="pei_180",
+            step_msc=5,
+            n_samples_training=100,
+            n_components=n_components,
+        )
+        # Define bins
+        limits_bins = processor.define_limits_bins(mock_data, n_bins=n_bins)
+        # Generate mock data
+        new_mock_data = np.random.randint(
+            lower_value - 1, upper_value + 1, (n_samples, n_components)
+        )
+
+        # Attribute the right bins to the new data
+        new_bins = processor.find_bins(new_mock_data, limits_bins)
+        print(new_bins)
+        # Assert shapes
+        self.assertTrue(new_bins.shape[0] == n_samples)
+        self.assertTrue(new_bins.shape[1] == n_components)
+
+        # Assert values
+        true_values = np.array([0, 0, 1, 2, 3, 3])
+        self.assertTrue((true_values == new_bins[0, :]).all())
 
 
 if __name__ == "__main__":
