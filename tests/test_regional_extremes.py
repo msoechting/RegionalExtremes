@@ -262,20 +262,25 @@ class TestClimaticRegionalExtremes(TestRegionalExtremes):
         # Define bins
         limits_bins = processor.define_limits_bins(mock_data, n_bins=n_bins)
         # Generate mock data
-        new_mock_data = np.random.randint(
-            lower_value - 1, upper_value + 1, (n_samples, n_components)
+        new_mock_data = np.array(
+            [
+                [5, 5, 5],  # higher values than the ones seen during the define_limits
+                [-1, -1, -1],  # smaller values
+                [1, 1, 1],  # values on the limits
+                [2.3, 1.2, 3.7],  # random
+                [0.1, 2.4, 3.4],
+            ]
         )
-
         # Attribute the right bins to the new data
         new_bins = processor.find_bins(new_mock_data, limits_bins)
-        print(new_bins)
+
         # Assert shapes
-        self.assertTrue(new_bins.shape[0] == n_samples)
+        self.assertTrue(new_bins.shape[0] == new_mock_data.shape[0])
         self.assertTrue(new_bins.shape[1] == n_components)
 
         # Assert values
-        true_values = np.array([0, 0, 1, 2, 3, 3])
-        self.assertTrue((true_values == new_bins[0, :]).all())
+        true_values = np.array([[3, 3, 3], [0, 0, 0], [1, 1, 1], [2, 1, 3], [0, 2, 3]])
+        self.assertTrue((true_values == new_bins).all())
 
 
 if __name__ == "__main__":
