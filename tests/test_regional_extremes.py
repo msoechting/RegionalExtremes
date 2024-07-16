@@ -12,7 +12,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 # from regional_extremes import CLIMATIC_FILEPATH
 CLIMATIC_FILEPATH = "/Net/Groups/BGI/scratch/mweynants/DeepExtremes/v3/PEICube.zarr"
-from regional_extremes import RegionalExtremes, ClimaticRegionalExtremes
+from regional_extremes import RegionalExtremes, DatasetHandler
 
 
 class TestRegionalExtremes(unittest.TestCase):
@@ -42,7 +42,7 @@ class TestRegionalExtremes(unittest.TestCase):
         # self.vegetation_data = xr.DataArray(
         #     ecological_data,
         #     coords=[lonchunk, lonstep_modis, latchunck, latstep_modis, time],
-        #     dims=["lonchunk", "lonstep_modis", "latchunck", "latstep_modis", "time"],
+        #     sizes=["lonchunk", "lonstep_modis", "latchunck", "latstep_modis", "time"],
         # )
 
         # Mock the open_dataset method to return the mock datasets
@@ -84,20 +84,29 @@ class TestRegionalExtremes(unittest.TestCase):
 
 class TestClimaticRegionalExtremes(TestRegionalExtremes):
     def test_load_data_climatic(self):
-        processor = ClimaticRegionalExtremes()
+        processor = DatasetHandler(
+            index="pei_180",
+            n_samples=10,
+            step_msc=5,
+            load_data=False,
+        )
         processor.load_data()
         # Check the data is not empty
         self.assertIsNotNone(processor.data)
 
     def test_climatic_apply_transformations_true_data(self):
-        processor = ClimaticRegionalExtremes()
+        processor = DatasetHandler(
+            index="pei_180",
+            n_samples=10,
+            step_msc=5,
+            load_data=False,
+        )
         processor.load_data()
-
         expected_len_lonlat = (
-            processor.data.dims["longitude"] * processor.data.dims["latitude"]
+            processor.data.sizes["longitude"] * processor.data.sizes["latitude"]
         )
 
-        processor.apply_transformations()
+        processor.apply_climatic_transformations()
 
         # Check if the longitude values are within the range -180 to 180
         self.assertTrue(
@@ -118,17 +127,22 @@ class TestClimaticRegionalExtremes(TestRegionalExtremes):
         )
 
         # Check if the dimensions are stacked correctly
-        self.assertIn("lonlat", processor.data.dims)
-        self.assertIn("time", processor.data.dims)
-        self.assertEqual(processor.data.dims["lonlat"], expected_len_lonlat)
+        self.assertIn("lonlat", processor.data.sizes)
+        self.assertIn("time", processor.data.sizes)
+        self.assertEqual(processor.data.sizes["lonlat"], expected_len_lonlat)
 
     def test_climatic_apply_transformations_mock_data(self):
-        processor = ClimaticRegionalExtremes(index="pei_180")
+        processor = DatasetHandler(
+            index="pei_180",
+            n_samples=10,
+            step_msc=5,
+            load_data=False,
+        )
         # Replace the data by the mock dataset
         processor.data = self.mock_climatic_dataset(index="pei_180")
 
         # Apply the transformations
-        processor.apply_transformations()
+        processor.apply_climatic_transformations()
 
         # Check if the longitude transformation is correctly applied
         expected_longitudes = np.sort(
@@ -162,45 +176,54 @@ class TestClimaticRegionalExtremes(TestRegionalExtremes):
         np.testing.assert_array_equal(processor.data.time, expected_times)
 
         # Check if the dimensions are stacked correctly
-        self.assertIn("lonlat", processor.data.dims)
-        self.assertIn("time", processor.data.dims)
+        self.assertIn("lonlat", processor.data.sizes)
+        self.assertIn("time", processor.data.sizes)
 
         # Check if the dimensions lens are correct
         expected_len_lonlat = (
-            self.mock_climatic_dataset.dims["longitude"]
-            * self.mock_climatic_dataset.dims["latitude"]
+            self.mock_climatic_dataset.sizes["longitude"]
+            * self.mock_climatic_dataset.sizes["latitude"]
         )
-        self.assertEqual(processor.data.dims["lonlat"], expected_len_lonlat)
-        self.assertEqual(processor.data.dims["time"], len(expected_times))
+        self.assertEqual(processor.data.sizes["lonlat"], expected_len_lonlat)
+        self.assertEqual(processor.data.sizes["time"], len(expected_times))
 
-    def test_compute_pca_and_transform_mock_data(self):
-        n_samples_training = 10
-        n_components = 3
-        processor = ClimaticRegionalExtremes(
+    def test_compute_and_scale_the_msc_mock_data(self):
+        data = DatasetHandler(
             index="pei_180",
+            n_samples=10,
             step_msc=5,
-            n_samples_training=n_samples_training,
-            n_components=n_components,
+            load_data=False,
         )
-        t1 = time.time()
+
         # Use the mock dataset
         dates = [
             datetime.date(2017, 1, 1) + datetime.timedelta(days=x)
             for x in range(0, 366, 1)
         ]
         dates = np.array(dates).astype("datetime64[ns]")
-        processor.data = self.mock_climatic_dataset(index="pei_180", time=dates)
+        data.data = self.mock_climatic_dataset(index="pei_180", time=dates)
 
-        # Apply the transformations
-        processor.apply_transformations()
-
+        data.apply_climatic_transformations()
+        data.randomly_select_data()
+        self.assertTrue(
+            data.data.sizes["lonlat"] == 10,
+            "number of samples is different than n_samples",
+        )
+        expected_max = np.max(data.data)
+        expected_min = np.min(data.data)
         # Scale the data between 0 and 1.
-        scaled_data = processor.compute_and_scale_the_msc(n_samples=10)
+        scaled_data, (max_data, min_data) = data.compute_and_scale_the_msc()
 
         self.assertTrue(
             ((scaled_data >= -1) & (scaled_data <= 1)).all(),
+            "data are not scaled between 1- and 1.",
+        )
+        self.assertTrue(
+            ((max_data == expected_max) & (min_data == expected_min)),
             "data are not scaled between 0 and 1.",
         )
+
+    def test_compute_pca_and_transform(self):
         # Fit and apply the PCA
         pca_components = processor.compute_pca_and_transform(scaled_data)
         self.assertTrue(pca_components.shape[0] == n_samples_training)
