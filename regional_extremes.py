@@ -104,6 +104,8 @@ class RegionalExtremes:
         self.n_components = n_components
         self.n_bins = n_bins
         self.saving_path = saving_path
+        if self.saving_path:
+            self.saving_path = Path(f"{saving_path}/{self.index}")
 
         self.pca = None
 
@@ -155,7 +157,7 @@ class RegionalExtremes:
         assert (
             projected_data.shape[1] == self.n_components
         ), "projected_data should have the same number of columns as n_components"
-        assert n_bins > 0, "n_bins should be greater than 0"
+        assert self.n_bins > 0, "n_bins should be greater than 0"
 
         # Define bounds for each component  (n+1 bounds to divide each component in n bins)
         limits_bins = [
@@ -168,8 +170,6 @@ class RegionalExtremes:
             ]  # Remove first and last limits to avoid attributing new bins to extreme values
             for component in range(self.n_components)
         ]
-        # Save the limits
-        np.save(saving_limits_bins_path, limits_bins)
         return limits_bins
 
     def apply_pca(self, scaled_data):
@@ -197,6 +197,19 @@ class RegionalExtremes:
 
     def apply_threshold():
         raise NotImplementedError()
+
+    def save_experiment(args, limits_bins: list, min_data: int, max_data: int):
+        # Save the limits
+        assert self.saving_path is not None, "the saving path is missing"
+
+        # Save the limits of the bins
+        assert (
+            len(limits_bins) == self.n_components
+        ), "the lenght of limits_bins list is not equal to the number of components"
+        assert limits_bins[0].shape[0] == self.n_bins - 1, "the "
+        saving_path = f"{self.saving_path}limits_bins.npy"
+        np.save(saving_path, limits_bins)
+        return
 
 
 class DatasetHandler:
@@ -316,7 +329,7 @@ class DatasetHandler:
         )
 
         # Scale the data between 0 and 1
-        # Check if the data are in the file. especially after training pca
+        # TODO Check if the data are in the file. especially after training pca
         if (self.max_data and self.min_data) is None:
             self.max_data = self.data[self.index].max().values
             self.min_data = self.data[self.index].min().values

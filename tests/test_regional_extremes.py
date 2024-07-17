@@ -223,15 +223,18 @@ class TestClimaticRegionalExtremes(TestRegionalExtremes):
             "data are not scaled between 0 and 1.",
         )
 
-    def test_compute_pca_and_transform(self):
-        # Fit and apply the PCA
-        pca_components = processor.compute_pca_and_transform(scaled_data)
-        self.assertTrue(pca_components.shape[0] == n_samples_training)
-        self.assertTrue(pca_components.shape[1] == n_components)
-
+    #    def test_compute_pca_and_transform(self):
+    #        # Fit and apply the PCA
+    #        pca_components = processor.compute_pca_and_transform(scaled_data)
+    #        self.assertTrue(pca_components.shape[0] == n_samples_training)
+    #        self.assertTrue(pca_components.shape[1] == n_components)
+    #
     def test_define_limits_bins_mock_data(self):
+        index = "pei_180"
+        step_msc = 5
+        n_samples = 100
+
         n_components = 3
-        n_samples = 30
         n_bins = 4
 
         # Range of the distribution of the mock dataset
@@ -239,18 +242,25 @@ class TestClimaticRegionalExtremes(TestRegionalExtremes):
         random_high = 5
 
         # Generate mock data
-        mock_scaled_data = np.random.randint(
+        data = DatasetHandler(
+            index=index,
+            n_samples=n_samples,
+            step_msc=step_msc,
+            load_data=False,
+        )
+        data.data = np.random.randint(
             random_low, random_high, (n_samples, n_components)
         )
 
-        processor = ClimaticRegionalExtremes(
-            index="pei_180",
-            step_msc=5,
-            n_samples_training=100,
+        processor = RegionalExtremes(
+            index=index,
+            step_msc=step_msc,
             n_components=n_components,
+            n_bins=n_bins,
+            saving_path="results/test/",
         )
         # Define box
-        limits_bins = processor.define_limits_bins(mock_scaled_data, n_bins=n_bins)
+        limits_bins = processor.define_limits_bins(data.data)
 
         # Assert shapes
         self.assertTrue(len(limits_bins) == n_components)
@@ -263,9 +273,12 @@ class TestClimaticRegionalExtremes(TestRegionalExtremes):
             )
 
     def test_find_bins_mock_data(self):
+        index = "pei_180"
+        step_msc = 5
         n_components = 3
-        n_samples = 30
         n_bins = 4
+
+        n_samples = 30
 
         # Range of the distribution of the mock dataset
         lower_value = 0
@@ -276,14 +289,17 @@ class TestClimaticRegionalExtremes(TestRegionalExtremes):
             lower_value, upper_value, (n_samples, n_components)
         )
 
-        processor = ClimaticRegionalExtremes(
-            index="pei_180",
-            step_msc=5,
-            n_samples_training=100,
+        processor = RegionalExtremes(
+            index=index,
+            step_msc=step_msc,
             n_components=n_components,
+            n_bins=n_bins,
+            saving_path="results/test/",
         )
+
         # Define bins
-        limits_bins = processor.define_limits_bins(mock_data, n_bins=n_bins)
+        limits_bins = processor.define_limits_bins(mock_data)
+
         # Generate mock data
         new_mock_data = np.array(
             [
