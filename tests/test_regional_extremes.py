@@ -1,57 +1,46 @@
 import sys
 import os
 import unittest
-from unittest.mock import patch, MagicMock
-import xarray as xr
-import numpy as np
-import datetime
-import time
+from unittest.mock import patch, MagicMock, Mock
+import tempfile
 
 # Add the project root to the Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 # from regional_extremes import CLIMATIC_FILEPATH
 CLIMATIC_FILEPATH = "/Net/Groups/BGI/scratch/mweynants/DeepExtremes/v3/PEICube.zarr"
-from regional_extremes import RegionalExtremes, DatasetHandler
+from regional_extremes import *  # RegionalExtremes, DatasetHandler
 
 
 class TestRegionalExtremes(unittest.TestCase):
     def setUp(self):
         #    """Set up mock datasets for testing."""
+        index = "pei_180"
+        step_msc = 5
+        n_components = 3
+        n_bins = 4
 
-        # self.mock_climatic_dataset = lambda index, time: mock_climatic_dataset(
-        #    index, time=time
-        # )
+        self.data_small = DatasetHandler(
+            index=index,
+            n_samples=10,
+            step_msc=step_msc,
+            load_data=False,
+        )
 
-        # lonchunk = np.arange(-179, 179, 50.5)
-        # latchunck = np.arange(-89, 89, 50.5)
+        self.data_big = DatasetHandler(
+            index=index,
+            n_samples=100,
+            step_msc=step_msc,
+            load_data=False,
+        )
 
-        # latstep_modis = np.arange(-0.975, 0.975, 0.5)
-        # lonstep_modis = np.arange(-0.975, 0.975, 0.5)
-
-        # ecological_data = np.random.random(
-        #     (
-        #         len(lonchunk),
-        #         len(lonstep_modis),
-        #         len(latchunck),
-        #         len(latstep_modis),
-        #         len(time),
-        #     )
-        # )
-        #
-        # self.vegetation_data = xr.DataArray(
-        #     ecological_data,
-        #     coords=[lonchunk, lonstep_modis, latchunck, latstep_modis, time],
-        #     sizes=["lonchunk", "lonstep_modis", "latchunck", "latstep_modis", "time"],
-        # )
-
-        # Mock the open_dataset method to return the mock datasets
-        # self.mock_dataset = patch("xarray.open_dataset").start()
-        # self.mock_dataset.side_effect = lambda filepath: {
-        #     self.climatic_filepath: xr.Dataset({"data": self.climatic_data}),
-        #     self.vegetation_filepath: xr.Dataset({"data": self.vegetation_data}),
-        # }[filepath]
-        a = 1
+        self.processor = RegionalExtremes(
+            index=index,
+            step_msc=step_msc,
+            n_components=n_components,
+            n_bins=n_bins,
+            saving_path="results/test/",
+        )
 
     def tearDown(self):
         """Stop all patches."""
@@ -84,13 +73,13 @@ class TestRegionalExtremes(unittest.TestCase):
 
 class TestClimaticRegionalExtremes(TestRegionalExtremes):
     def test_load_data_climatic(self):
-        processor = DatasetHandler(
+        data = DatasetHandler(
             index="pei_180",
             n_samples=10,
             step_msc=5,
-            load_data=False,
+            load_data=True,
         )
-        processor.load_data()
+        data.load_data()
         # Check the data is not empty
         self.assertIsNotNone(processor.data)
 
@@ -99,7 +88,7 @@ class TestClimaticRegionalExtremes(TestRegionalExtremes):
             index="pei_180",
             n_samples=10,
             step_msc=5,
-            load_data=False,
+            load_data=True,
         )
         processor.load_data()
         expected_len_lonlat = (
@@ -132,12 +121,7 @@ class TestClimaticRegionalExtremes(TestRegionalExtremes):
         self.assertEqual(processor.data.sizes["lonlat"], expected_len_lonlat)
 
     def test_climatic_apply_transformations_mock_data(self):
-        processor = DatasetHandler(
-            index="pei_180",
-            n_samples=10,
-            step_msc=5,
-            load_data=False,
-        )
+        processor = self.data_small
         # Replace the data by the mock dataset
         processor.data = self.mock_climatic_dataset(index="pei_180")
 
@@ -188,31 +172,24 @@ class TestClimaticRegionalExtremes(TestRegionalExtremes):
         self.assertEqual(processor.data.sizes["time"], len(expected_times))
 
     def test_compute_and_scale_the_msc_mock_data(self):
-        data = DatasetHandler(
-            index="pei_180",
-            n_samples=10,
-            step_msc=5,
-            load_data=False,
-        )
-
         # Use the mock dataset
         dates = [
             datetime.date(2017, 1, 1) + datetime.timedelta(days=x)
             for x in range(0, 366, 1)
         ]
         dates = np.array(dates).astype("datetime64[ns]")
-        data.data = self.mock_climatic_dataset(index="pei_180", time=dates)
+        self.data_small.data = self.mock_climatic_dataset(index="pei_180", time=dates)
 
-        data.apply_climatic_transformations()
-        data.randomly_select_data()
+        self.data_small.apply_climatic_transformations()
+        self.data_small.randomly_select_data()
         self.assertTrue(
-            data.data.sizes["lonlat"] == 10,
+            self.data_small.data.sizes["lonlat"] == 10,
             "number of samples is different than n_samples",
         )
-        expected_max = np.max(data.data)
-        expected_min = np.min(data.data)
+        expected_max = np.max(self.data_small.data)
+        expected_min = np.min(self.data_small.data)
         # Scale the data between 0 and 1.
-        scaled_data, (max_data, min_data) = data.compute_and_scale_the_msc()
+        scaled_data, (max_data, min_data) = self.data_small.compute_and_scale_the_msc()
 
         self.assertTrue(
             ((scaled_data >= -1) & (scaled_data <= 1)).all(),
@@ -230,10 +207,7 @@ class TestClimaticRegionalExtremes(TestRegionalExtremes):
     #        self.assertTrue(pca_components.shape[1] == n_components)
     #
     def test_define_limits_bins_mock_data(self):
-        index = "pei_180"
-        step_msc = 5
         n_samples = 100
-
         n_components = 3
         n_bins = 4
 
@@ -242,25 +216,12 @@ class TestClimaticRegionalExtremes(TestRegionalExtremes):
         random_high = 5
 
         # Generate mock data
-        data = DatasetHandler(
-            index=index,
-            n_samples=n_samples,
-            step_msc=step_msc,
-            load_data=False,
-        )
-        data.data = np.random.randint(
+        self.data_big.data = np.random.randint(
             random_low, random_high, (n_samples, n_components)
         )
 
-        processor = RegionalExtremes(
-            index=index,
-            step_msc=step_msc,
-            n_components=n_components,
-            n_bins=n_bins,
-            saving_path="results/test/",
-        )
         # Define box
-        limits_bins = processor.define_limits_bins(data.data)
+        limits_bins = processor.define_limits_bins(self.data_big.data)
 
         # Assert shapes
         self.assertTrue(len(limits_bins) == n_components)
@@ -273,6 +234,7 @@ class TestClimaticRegionalExtremes(TestRegionalExtremes):
             )
 
     def test_find_bins_mock_data(self):
+
         index = "pei_180"
         step_msc = 5
         n_components = 3
@@ -320,6 +282,61 @@ class TestClimaticRegionalExtremes(TestRegionalExtremes):
         # Assert values
         true_values = np.array([[3, 3, 3], [0, 0, 0], [1, 1, 1], [2, 1, 3], [0, 2, 3]])
         self.assertTrue((true_values == new_bins).all())
+
+    @unittest.mock.patch("argparse.ArgumentParser.parse_args")
+    def test_save_experiment_mock(self, mock_parse_args):
+
+        # Create a temporary directory for testing
+        # with tempfile.TemporaryDirectory() as temp_dir:
+        for i in range(1):
+            # Mock the argparse.Namespace object returned by parse_args
+            # mock_parse_args.return_value = mock_args
+            mock_parse_args.return_value = argparse.Namespace(
+                index="pei_180",
+                n_components=2,
+                step_msc=5,
+                n_bins=4,
+                saving_path="./experiments/",
+            )
+            # Mock data
+            limits_bins = [np.array([0.1, 0.2, 0.3]), np.array([0.1, 0.2, 0.3])]
+            min_data = 10
+            max_data = 100
+            processor = RegionalExtremes(
+                index=mock_parse_args.return_value.index,
+                step_msc=mock_parse_args.return_value.step_msc,
+                n_components=mock_parse_args.return_value.n_components,
+                n_bins=mock_parse_args.return_value.n_bins,
+                saving_path=mock_parse_args.return_value.saving_path,
+            )
+            # Change the pca attribute by the mock pca
+            processor.pca = PCA(n_components=processor.n_components)
+            processor.save_experiment(
+                mock_parse_args.return_value, limits_bins, min_data, max_data
+            )
+            # Create the saving path
+            saving_path = Path(CURRENT_DIRECTORY_PATH) / Path(
+                mock_parse_args.return_value.saving_path
+            )
+            date_of_today = datetime.datetime.today().strftime("%Y-%m-%-d")
+
+            saving_path = (
+                saving_path / f"{mock_parse_args.return_value.index}_{date_of_today}"
+            )
+
+            # Verify that files were created and saved correctly
+            args_path = saving_path / "args.json"
+            print("test", args_path)
+            self.assertTrue(args_path.exists())
+
+            min_max_data_path = saving_path / "min_max_data.json"
+            self.assertTrue(min_max_data_path.exists())
+
+            pca_path = saving_path / "pca_matrix.pkl"
+            self.assertTrue(pca_path.exists())
+
+            limits_bins_path = saving_path / "limits_bins.npy"
+            self.assertTrue(limits_bins_path.exists())
 
 
 if __name__ == "__main__":

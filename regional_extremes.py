@@ -1,5 +1,6 @@
 import xarray as xr
 import numpy as np
+import json
 import random
 import datetime
 from sklearn.decomposition import PCA
@@ -7,13 +8,15 @@ import pickle as pk
 from pathlib import Path
 from typing import Union
 import time
+import os
 
-from argparse import ArgumentParser
+import argparse  # import ArgumentParser
 
 CLIMATIC_FILEPATH = "/Net/Groups/BGI/scratch/mweynants/DeepExtremes/v3/PEICube.zarr"
+CURRENT_DIRECTORY_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__)))
 
-# Argparser for all your configuration needs
-parser = ArgumentParser()
+# Argparser for all configuration needs
+parser = argparse.ArgumentParser()
 
 parser.add_argument(
     "--index",
@@ -57,7 +60,7 @@ parser.add_argument(
 parser.add_argument(
     "--saving_path",
     type=Path,
-    default="./results/",
+    default="./experiments/",
     help="Path to the raw MMEarth dataset folder (default: None). "
     "If not given the environment variable MMEARTH_DIR will be used",
 )
@@ -77,6 +80,7 @@ parser.add_argument(
     help="Path to the raw MMEarth dataset folder (default: None). "
     "If not given the environment variable MMEARTH_DIR will be used",
 )
+# return parser.parse_args(args)
 
 
 class RegionalExtremes:
@@ -103,9 +107,7 @@ class RegionalExtremes:
         self.step_msc = step_msc
         self.n_components = n_components
         self.n_bins = n_bins
-        self.saving_path = saving_path
-        if self.saving_path:
-            self.saving_path = Path(f"{saving_path}/{self.index}")
+        self.saving_path = Path(CURRENT_DIRECTORY_PATH) / Path(saving_path)
 
         self.pca = None
 
@@ -131,11 +133,6 @@ class RegionalExtremes:
         print(
             f"PCA performed. sum explained variance: {sum(self.pca.explained_variance_ratio_)}"
         )
-
-        # save the model
-        if self.saving_path:
-            saving_path = f"{self.saving_path}pca_matrix.pkl"
-            pk.dump(pca, open(saving_path, "wb"))
         return pca_components
 
     def define_limits_bins(self, projected_data):
@@ -198,17 +195,40 @@ class RegionalExtremes:
     def apply_threshold():
         raise NotImplementedError()
 
-    def save_experiment(args, limits_bins: list, min_data: int, max_data: int):
-        # Save the limits
+    def save_experiment(self, args, limits_bins: list, min_data: int, max_data: int):
         assert self.saving_path is not None, "the saving path is missing"
+
+        # Create the saving path if it does not exist
+        date_of_today = datetime.datetime.today().strftime("%Y-%m-%-d_%H:%M:%S")
+        self.saving_path = self.saving_path / f"{self.index}_{date_of_today}"
+
+        self.saving_path.mkdir(parents=True, exist_ok=True)
+
+        # Save args to a file for future reference
+        args_path = self.saving_path / "args.json"
+        with open(args_path, "w") as f:
+            json.dump(args.__dict__, f, indent=4)
+
+        # Save min_data and max_data
+        min_max_data_path = self.saving_path / "min_max_data.json"
+        with open(min_max_data_path, "w") as f:
+            json.dump({"min_data": min_data, "max_data": max_data}, f, indent=4)
+
+        # Save the PCA model
+        pca_path = self.saving_path / "pca_matrix.pkl"
+        with open(pca_path, "wb") as f:
+            pk.dump(self.pca, f)
 
         # Save the limits of the bins
         assert (
             len(limits_bins) == self.n_components
         ), "the lenght of limits_bins list is not equal to the number of components"
-        assert limits_bins[0].shape[0] == self.n_bins - 1, "the "
-        saving_path = f"{self.saving_path}limits_bins.npy"
-        np.save(saving_path, limits_bins)
+        assert (
+            limits_bins[0].shape[0] == self.n_bins - 1
+        ), "the limits do not fit the number of bins"
+
+        limits_bins_path = self.saving_path / "limits_bins.npy"
+        np.save(limits_bins_path, limits_bins)
         return
 
 
@@ -368,7 +388,11 @@ class EcologicalRegionalExtremes:
 
 
 if __name__ == "__main__":
-    args = parser.parse_args()
+    args = argparse.parser.parse_args()
+    print(args)
+    import os
+
+    os.exit()
     t1 = time.time()
     data_subset = DatasetHandler(
         index=args.index,
