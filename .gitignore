@@ -1,5 +1,6 @@
 # extensions
 *.png
+*.sh
 
 # folders
 *results/*

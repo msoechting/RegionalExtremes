@@ -8,12 +8,19 @@ import pickle as pk
 from pathlib import Path
 from typing import Union
 import time
+import sys
 import os
+
+np.set_printoptions(threshold=sys.maxsize)
+
+from global_land_mask import globe
 
 import argparse  # import ArgumentParser
 
 CLIMATIC_FILEPATH = "/Net/Groups/BGI/scratch/mweynants/DeepExtremes/v3/PEICube.zarr"
 CURRENT_DIRECTORY_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__)))
+NORTH_POLE_THRESHOLD = 66.5
+SOUTH_POLE_THRESHOLD = -66.5
 
 # Argparser for all configuration needs
 parser = argparse.ArgumentParser()
@@ -45,8 +52,7 @@ parser.add_argument(
     "--n_samples",
     type=int,
     default=10,
-    help="Path to the raw MMEarth dataset folder (default: None). "
-    "If not given the environment variable MMEARTH_DIR will be used",
+    help="Select randomly n_samples**2.",
 )
 
 parser.add_argument(
@@ -73,42 +79,64 @@ parser.add_argument(
     "If not given the environment variable MMEARTH_DIR will be used",
 )
 
-parser.add_argument(
-    "--load_data",
-    type=bool,
-    default=True,
-    help="Path to the raw MMEarth dataset folder (default: None). "
-    "If not given the environment variable MMEARTH_DIR will be used",
-)
-# return parser.parse_args(args)
+
+# Utils.
+def printt(message: str):
+    """
+    Small function to track the different step of the program with the time
+    """
+    current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{current_time}] {message}")
 
 
-class RegionalExtremes:
-    def __init__(
-        self,
-        index: str,
-        step_msc,
-        n_components,
-        n_bins,
-        saving_path: Union[Path, None],
-    ):
-        """_summary_
+class SharedConfig:
+    def __init__(self, args: argparse.Namespace):
+        """
+            Define the attribute in common between the other classes.
 
         Args:
-            index (str): _description_
-            step_msc (_type_): _description_
-            n_samples (int, optional): number of samples to fit the PCA. Defaults to 10.
-            n_components (int, optional): number of components to compute the PCA. Defaults to 3.
-            n_components (_type_): _description_
-            n_bins (_type_): _description_
-            saving_path (_type_): _description_
+            args (argparse.Namespace): Parsed arguments from argparse.ArgumentParser().parse_args()
         """
-        self.index = index
-        self.step_msc = step_msc
+
+        self.index = args.index
+        self.step_msc = args.step_msc
+        self.saving_path = args.saving_path
+
+        # Create the saving path
+        date_of_today = datetime.datetime.today().strftime("%Y-%m-%-d")  # _%H:%M:%S")
+        self.saving_path = (
+            Path(CURRENT_DIRECTORY_PATH)
+            / Path(self.saving_path)
+            / f"{self.index}_{date_of_today}"
+        )
+        self.saving_path.mkdir(parents=True, exist_ok=True)
+
+        # Save args to a file for future reference
+        args_path = self.saving_path / "args.json"
+        args.saving_path = str(self.saving_path)
+        with open(args_path, "w") as f:
+            json.dump(args.__dict__, f, indent=4)
+
+
+class RegionalExtremes(SharedConfig):
+    def __init__(
+        self,
+        config: SharedConfig,
+        n_components: int,
+        n_bins: int,
+    ):
+        """
+        Compute the regional extremes by defining boxes of similar region using a PCA computed on the mean seasonal cycle of the samples.
+
+        Args:
+            config (SharedConfig): Shared attributes across the classes.
+            n_components (int): number of components of the PCA
+            n_bins (int): Number of bins per component to define the boxes. Number of boxes = n_bins**n_components
+        """
+        super().__init__(config)
+
         self.n_components = n_components
         self.n_bins = n_bins
-        self.saving_path = Path(CURRENT_DIRECTORY_PATH) / Path(saving_path)
-
         self.pca = None
 
     def compute_pca_and_transform(
@@ -130,9 +158,16 @@ class RegionalExtremes:
         self.pca = PCA(n_components=self.n_components)
         # Fit the PCA. Each colomns give us the projection through 1 component.
         pca_components = self.pca.fit_transform(scaled_data)
-        print(
+
+        printt(
             f"PCA performed. sum explained variance: {sum(self.pca.explained_variance_ratio_)}"
         )
+
+        # Save the PCA model
+        pca_path = self.saving_path / "pca_matrix.pkl"
+        with open(pca_path, "wb") as f:
+            pk.dump(self.pca, f)
+
         return pca_components
 
     def define_limits_bins(self, projected_data):
@@ -167,6 +202,17 @@ class RegionalExtremes:
             ]  # Remove first and last limits to avoid attributing new bins to extreme values
             for component in range(self.n_components)
         ]
+
+        # Save the limits of the bins
+        assert (
+            len(limits_bins) == self.n_components
+        ), "the lenght of limits_bins list is not equal to the number of components"
+        assert (
+            limits_bins[0].shape[0] == self.n_bins - 1
+        ), "the limits do not fit the number of bins"
+
+        limits_bins_path = self.saving_path / "limits_bins.npy"
+        np.save(limits_bins_path, limits_bins)
         return limits_bins
 
     def apply_pca(self, scaled_data):
@@ -195,46 +241,12 @@ class RegionalExtremes:
     def apply_threshold():
         raise NotImplementedError()
 
-    def save_experiment(self, args, limits_bins: list, min_data: int, max_data: int):
-        assert self.saving_path is not None, "the saving path is missing"
 
-        # Create the saving path if it does not exist
-        date_of_today = datetime.datetime.today().strftime("%Y-%m-%-d_%H:%M:%S")
-        self.saving_path = self.saving_path / f"{self.index}_{date_of_today}"
-
-        self.saving_path.mkdir(parents=True, exist_ok=True)
-
-        # Save args to a file for future reference
-        args_path = self.saving_path / "args.json"
-        with open(args_path, "w") as f:
-            json.dump(args.__dict__, f, indent=4)
-
-        # Save min_data and max_data
-        min_max_data_path = self.saving_path / "min_max_data.json"
-        with open(min_max_data_path, "w") as f:
-            json.dump({"min_data": min_data, "max_data": max_data}, f, indent=4)
-
-        # Save the PCA model
-        pca_path = self.saving_path / "pca_matrix.pkl"
-        with open(pca_path, "wb") as f:
-            pk.dump(self.pca, f)
-
-        # Save the limits of the bins
-        assert (
-            len(limits_bins) == self.n_components
-        ), "the lenght of limits_bins list is not equal to the number of components"
-        assert (
-            limits_bins[0].shape[0] == self.n_bins - 1
-        ), "the limits do not fit the number of bins"
-
-        limits_bins_path = self.saving_path / "limits_bins.npy"
-        np.save(limits_bins_path, limits_bins)
-        return
-
-
-class DatasetHandler:
+class DatasetHandler(SharedConfig):
     def __init__(
-        self, index: str, n_samples: Union[int, None], step_msc: int, load_data: bool
+        self,
+        config: SharedConfig,
+        n_samples: Union[int, None],
     ):
         """
         Initialize DatasetHandler.
@@ -246,45 +258,79 @@ class DatasetHandler:
         step_msc (int, optional): temporal resolution of the msc, to reduce computationnal workload. Defaults to 5.
         """
 
-        self.index = index
+        super().__init__(config)
+
         self.n_samples = n_samples
-        self.step_msc = step_msc
-        self.filepath = CLIMATIC_FILEPATH
+        # TODO Check if the data are in the file. especially after training pca
         self.max_data = None
         self.min_data = None
         self.data = None
-        if load_data:
-            self.preprocess_data()
 
     def preprocess_data(self):
         """
         Preprocess data based on the index.
         """
         if self.index in ["pei_30", "pei_90", "pei_180"]:
-            self.load_data()
-            self.apply_climatic_transformations()
+            filepath = CLIMATIC_FILEPATH
+            self.load_data(filepath)
         else:
             raise NotImplementedError(
                 "Index unavailable. Index available:\n -Climatic: 'pei_30', 'pei_90', 'pei_180'. \n Ecological: 'None."
             )
 
         # Select only a subset of the data if n_samples is specified
-        if n_samples:
+        if self.n_samples:
             self.randomly_select_data()
         else:
-            print(f"computation on the entire dataset. {self.data.shape[0]} samples")
+            printt(f"Computation on the entire dataset. {self.data.shape[0]} samples")
 
+        self.apply_climatic_transformations()
         self.compute_and_scale_the_msc()
+        return self.data
 
-    def load_data(self):
+    def load_data(self, filepath):
         """
         Load data from the specified filepath.
 
         Parameters:
         filepath (str): Path to the data file.
         """
-        self.data = xr.open_zarr(self.filepath)[[self.index]]
-        print("Data loaded from {}".format(self.filepath))
+        self.data = xr.open_zarr(filepath)[[self.index]]
+        printt("Data loaded from {}".format(filepath))
+
+    # Transform the longitude coordinates to -180 and 180
+    def coordstolongitude(self, x):
+        return ((x + 180) % 360) - 180
+
+    def randomly_select_data(self):
+        """
+        Randomly select a subset of the data based on n_samples.
+        """
+        # select n_samples instead of n_samples**2 but computationnally expensive!
+        # self.data = self.data.stack(lonlat=("longitude", "latitude")).transpose(
+        #     "lonlat", "time", ...
+        # )
+        # lonlat_indices = random.choices(self.data.lonlat.values, k=self.n_samples)
+        # self.data = self.data.sel(lonlat=lonlat_indices)
+        lon_indices = []
+        lat_indices = []
+
+        while len(lon_indices) < self.n_samples:
+            lon_index = random.randint(0, self.data.longitude.sizes["longitude"] - 1)
+            lat_index = random.randint(0, self.data.latitude.sizes["latitude"] - 1)
+
+            lon = self.coordstolongitude(self.data.longitude[lon_index].item())
+
+            lat = self.data.latitude[lat_index].item()
+            # if location is on a land and not in the polar regions.
+            if globe.is_land(lat, lon) and np.abs(lat) <= NORTH_POLE_THRESHOLD:
+                lon_indices.append(lon_index)
+                lat_indices.append(lat_index)
+
+        self.data = self.data.isel(longitude=lon_indices, latitude=lat_indices)
+        printt(
+            f"Randomly selected {self.data.sizes['latitude'] * self.data.sizes['longitude']} samples for training."
+        )
 
     def apply_climatic_transformations(self):
         """
@@ -312,27 +358,29 @@ class DatasetHandler:
             time=slice(datetime.date(1951, 1, 1), datetime.date(2022, 12, 31))
         )
 
-        # Transform the longitude coordinates to -180 and 180
-        def coordstolongitude(x):
-            return ((x + 180) % 360) - 180
-
-        self.data = self.data.roll(longitude=180 * 4, roll_coords=True)
-        self.data = self.data.assign_coords(
-            longitude=coordstolongitude(self.data.longitude)
+        # Remove data from the polar regions
+        self.data = self.data.where(
+            np.abs(self.data.latitude) <= NORTH_POLE_THRESHOLD, drop=True
         )
+        self.data = self.data.where(
+            np.abs(self.data.latitude) >= SOUTH_POLE_THRESHOLD, drop=True
+        )
+
+        # Transform the longitude coordinates
+        # Shifts the data of longitude of 180*4 elements, elements that roll past the end are re-introduced
+        self.data = self.data.roll(longitude=180 * 4, roll_coords=True)
+        # Transform the longitude coordinates to -180 and 180
+        self.data = self.data.assign_coords(
+            longitude=self.coordstolongitude(self.data.longitude)
+        )
+
+        # Remove latitude above polar circles.
 
         self.data = self.data.stack(lonlat=("longitude", "latitude")).transpose(
             "lonlat", "time", ...
         )
-        print(f"Climatic data loaded with dimensions: {self.data.sizes}")
 
-    def randomly_select_data(self):
-        """
-        Randomly select a subset of the data based on n_samples.
-        """
-        lonlat_indices = random.choices(self.data.lonlat.values, k=self.n_samples)
-        self.data = self.data.sel(lonlat=lonlat_indices)
-        print(f"Randomly selected {self.n_samples} samples for training.")
+        printt(f"Climatic data loaded with dimensions: {self.data.sizes}")
 
     def compute_and_scale_the_msc(self):
         """
@@ -354,12 +402,23 @@ class DatasetHandler:
             self.max_data = self.data[self.index].max().values
             self.min_data = self.data[self.index].min().values
 
+        # Save min_data and max_data
+        min_max_data_path = self.saving_path / "min_max_data.json"
+        with open(min_max_data_path, "w") as f:
+            json.dump(
+                {
+                    "min_data": self.min_data.tolist(),
+                    "max_data": self.max_data.tolist(),
+                },
+                f,
+                indent=4,
+            )
+
         # reduce the temporal resolution
         self.data = self.data["msc"].isel(dayofyear=slice(1, 366, self.step_msc))
 
         # Scale the data between 0 and 1
         self.data = (self.min_data - self.data) / (self.max_data - self.min_data)
-        return self.data, (self.min_data, self.max_data)
 
 
 class EcologicalRegionalExtremes:
@@ -388,49 +447,22 @@ class EcologicalRegionalExtremes:
 
 
 if __name__ == "__main__":
-    args = argparse.parser.parse_args()
-    print(args)
-    import os
-
-    os.exit()
-    t1 = time.time()
-    data_subset = DatasetHandler(
-        index=args.index,
+    args = parser.parse_args()
+    config = SharedConfig(args)
+    dataset_processor = DatasetHandler(
+        config=config,
         n_samples=args.n_samples,
-        step_msc=args.step_msc,
-        load_data=args.load_data,
     )
-    t2 = time.time()
-    print(t2 - t1)
-    climatic_processor = RegionalExtremes(
-        index=args.index,
-        step_msc=args.step_msc,
+    data_subset = dataset_processor.preprocess_data()
+
+    extremes_processor = RegionalExtremes(
+        config=config,
         n_components=args.n_components,
         n_bins=args.n_bins,
-        saving_path=args.saving_path,
     )
-    t3 = time.time()
-    print(t3 - t2)
-    projected_data = climatic_processor.compute_pca_and_transform(
+    projected_data = extremes_processor.compute_pca_and_transform(
         scaled_data=data_subset
     )
 
-    # data_subset = DatasetHandler(
-    #         index=self.index, n_samples=None, load_data=load_data
-    #     )
-    projected_data = self.apply_pca(scaled_data=data_subset)
-
-    limits_bins = self.define_limits_bins(projected_data=projected_data)
-    climatic_processor.load_data()
-    t2 = time.time()
-    print(t2 - t1)
-    climatic_processor.apply_transformations()
-    t3 = time.time()
-    print(t3 - t2)
-    climatic_processor.perform_pca_on_the_msc(n_samples=10, n_components=3)
-    t4 = time.time()
-    print(t4 - t3)
-    climatic_processor.apply_pca(n_samples=20)
-    t5 = time.time()
-
-    # climatic_processor.compute_box_plot()
+    # data_subset = DatasetHandler(index=self.index, n_samples=None, load_data=load_data)
+    # projected_data = self.apply_pca(scaled_data=data_full)
