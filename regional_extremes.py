@@ -11,6 +11,8 @@ import time
 import sys
 import os
 
+from utils import printt
+
 np.set_printoptions(threshold=sys.maxsize)
 
 from global_land_mask import globe
@@ -19,103 +21,168 @@ import argparse  # import ArgumentParser
 
 CLIMATIC_FILEPATH = "/Net/Groups/BGI/scratch/mweynants/DeepExtremes/v3/PEICube.zarr"
 CURRENT_DIRECTORY_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__)))
+PARENT_DIRECTORY_PATH = os.path.abspath(os.path.join(CURRENT_DIRECTORY_PATH, os.pardir))
 NORTH_POLE_THRESHOLD = 66.5
 SOUTH_POLE_THRESHOLD = -66.5
 
+
 # Argparser for all configuration needs
-parser = argparse.ArgumentParser()
+def parser_arguments():
 
-parser.add_argument(
-    "--index",
-    type=str,
-    default="pei_180",
-    help=" The climatic or ecological index to be processed (default: pei_180). "
-    "Index available:\n -Climatic: 'pei_30', 'pei_90', 'pei_180'. \n Ecological: 'None.",
-)
+    parser = argparse.ArgumentParser()
 
-parser.add_argument(
-    "--step_msc",
-    type=int,
-    default=5,
-    help="step_msc (int, optional): temporal resolution of the msc, to reduce computationnal workload (default: 5). ",
-)
+    parser.add_argument(
+        "--id",
+        type=str,
+        default=None,
+        help="id is time of the job launch and job_id",
+    )
+    parser.add_argument(
+        "--index",
+        type=str,
+        default="pei_180",
+        help=" The climatic or ecological index to be processed (default: pei_180). "
+        "Index available:\n -Climatic: 'pei_30', 'pei_90', 'pei_180'. \n Ecological: 'None.",
+    )
+    parser.add_argument(
+        "--time_resolution",
+        type=int,
+        default=5,
+        help="time_resolution (int, optional): temporal resolution of the msc, to reduce computationnal workload (default: 5). ",
+    )
 
-parser.add_argument(
-    "--n_components",
-    type=int,
-    default=3,
-    help="Path to the raw MMEarth dataset folder (default: None). "
-    "If not given the environment variable MMEARTH_DIR will be used",
-)
+    parser.add_argument(
+        "--n_components",
+        type=int,
+        default=3,
+        help="Path to the raw MMEarth dataset folder (default: None). "
+        "If not given the environment variable MMEARTH_DIR will be used",
+    )
 
-parser.add_argument(
-    "--n_samples",
-    type=int,
-    default=10,
-    help="Select randomly n_samples**2.",
-)
+    parser.add_argument(
+        "--n_samples",
+        type=int,
+        default=10,
+        help="Select randomly n_samples**2.",
+    )
 
-parser.add_argument(
-    "--n_bins",
-    type=int,
-    default=25,
-    help="Path to the raw MMEarth dataset folder (default: None). "
-    "If not given the environment variable MMEARTH_DIR will be used",
-)
+    parser.add_argument(
+        "--n_bins",
+        type=int,
+        default=25,
+        help="Path to the raw MMEarth dataset folder (default: None). "
+        "If not given the environment variable MMEARTH_DIR will be used",
+    )
 
-parser.add_argument(
-    "--saving_path",
-    type=Path,
-    default="./experiments/",
-    help="Path to the raw MMEarth dataset folder (default: None). "
-    "If not given the environment variable MMEARTH_DIR will be used",
-)
+    parser.add_argument(
+        "--saving_path",
+        type=Path,
+        default="./experiments/",
+        help="Path to the raw MMEarth dataset folder (default: None). "
+        "If not given the environment variable MMEARTH_DIR will be used",
+    )
 
-parser.add_argument(
-    "--full_dataset_bins_limits",
-    type=bool,
-    default=False,
-    help="Path to the raw MMEarth dataset folder (default: None). "
-    "If not given the environment variable MMEARTH_DIR will be used",
-)
-
-
-# Utils.
-def printt(message: str):
-    """
-    Small function to track the different step of the program with the time
-    """
-    current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{current_time}] {message}")
+    parser.add_argument(
+        "--path_load_model",
+        type=Path,
+        default=None,
+        help="Path of the trained model folder.",
+    )
+    return parser
 
 
 class SharedConfig:
-    def __init__(self, args: argparse.Namespace):
+    def __init__(self, args: Namespace):
         """
-            Define the attribute in common between the other classes.
+        Initialize ModelHandler with the provided arguments.
 
         Args:
             args (argparse.Namespace): Parsed arguments from argparse.ArgumentParser().parse_args()
         """
-
         self.index = args.index
-        self.step_msc = args.step_msc
-        self.saving_path = args.saving_path
+        self.time_resolution = args.time_resolution
+        self.path_load_model = args.path_load_model
+        self.pca = None
+        self.min_data = None
+        self.max_data = None
 
-        # Create the saving path
-        date_of_today = datetime.datetime.today().strftime("%Y-%m-%-d")  # _%H:%M:%S")
+        if self.path_load_model is None:
+            printt(
+                "Initialisation of a new model, no path provided for an existing model."
+            )
+            self._initialize_new_model(args)
+        else:
+            printt(f"Loading of the model path: {self.path_load_model}")
+            self._load_existing_model()
+
+    def _initialize_new_model(self, args: Namespace):
+        """
+        Initialize settings for a new model when no model is loaded.
+
+        Args:
+            args (argparse.Namespace): Parsed arguments from argparse.ArgumentParser().parse_args()
+        """
+        self._set_saving_path(args)
+        self._save_args(args)
+
+    def _set_saving_path(self, args: Namespace):
+        """
+        Set the saving path for the new model.
+
+        Args:
+            args (argparse.Namespace): Parsed arguments from argparse.ArgumentParser().parse_args()
+        """
+        if args.id:
+            date_of_today = args.id
+        else:
+            date_of_today = datetime.datetime.today().strftime("%Y-%m-%d_%H:%M:%S")
+
         self.saving_path = (
-            Path(CURRENT_DIRECTORY_PATH)
-            / Path(self.saving_path)
-            / f"{self.index}_{date_of_today}"
+            Path(PARENT_DIRECTORY_PATH)
+            / Path(args.saving_path)
+            / date_of_today
+            / self.index
         )
+        print(f"The saving path is: {self.saving_path}")
         self.saving_path.mkdir(parents=True, exist_ok=True)
-
-        # Save args to a file for future reference
-        args_path = self.saving_path / "args.json"
         args.saving_path = str(self.saving_path)
-        with open(args_path, "w") as f:
-            json.dump(args.__dict__, f, indent=4)
+
+    def _save_args(self, args: Namespace):
+        """
+        Save the arguments to a JSON file for future reference.
+
+        Args:
+            args (argparse.Namespace): Parsed arguments from argparse.ArgumentParser().parse_args()
+        """
+        args_path = self.saving_path / "args.json"
+        if not args_path.exists():
+            with open(args_path, "w") as f:
+                json.dump(args.__dict__, f, indent=4)
+
+    def _load_existing_model(self):
+        """
+        Load an existing model's PCA matrix and min-max data from files.
+        """
+        self._load_min_max_data()
+        self._load_pca_matrix()
+
+    def _load_min_max_data(self):
+        """
+        Load min-max data from the file.
+        """
+        min_max_data_path = self.path_load_model / "min_max_data.json"
+        with open(min_max_data_path, "r") as f:
+            min_max_data = json.load(f)
+            self.min_data = min_max_data["min_data"]
+            self.max_data = min_max_data["max_data"]
+
+    def _load_pca_matrix(self):
+        """
+        Load PCA matrix from the file.
+        """
+        pca_path = self.path_load_model / "pca_matrix.pkl"
+        with open(pca_path, "rb") as f:
+            self.pca = pk.load(f)
 
 
 class RegionalExtremes(SharedConfig):
@@ -133,22 +200,23 @@ class RegionalExtremes(SharedConfig):
             n_components (int): number of components of the PCA
             n_bins (int): Number of bins per component to define the boxes. Number of boxes = n_bins**n_components
         """
-        super().__init__(config)
-
+        self.config = config
         self.n_components = n_components
         self.n_bins = n_bins
-        self.pca = None
+        self.pca = self.config.pca
 
     def compute_pca_and_transform(
         self,
         scaled_data,
     ):
-        """compute the principal component analysis (PCA) on the mean seasonal cycle (MSC) of n samples and scale it between 0 and 1. Each time step of the msc is considered as an independent component. nb of time_step used for the PCA computation = 366 / step_msc.
+        """compute the principal component analysis (PCA) on the mean seasonal cycle (MSC) of n samples and scale it between 0 and 1. Each time step of the msc is considered as an independent component. nb of time_step used for the PCA computation = 366 / time_resolution.
 
         Args:
             n_components (int, optional): number of components to compute the PCA. Defaults to 3.
-            step_msc (int, optional): temporal resolution of the msc, to reduce computationnal workload. Defaults to 5.
+            time_resolution (int, optional): temporal resolution of the msc, to reduce computationnal workload. Defaults to 5.
         """
+        assert self.config.path_load_model is None, "A model is already loaded."
+        assert self.pca is None, "The PCA is already fitted."
         assert scaled_data.shape[1] < 366
         assert (self.n_components > 0) & (
             self.n_components <= 366
@@ -156,6 +224,7 @@ class RegionalExtremes(SharedConfig):
 
         # Compute the PCA
         self.pca = PCA(n_components=self.n_components)
+
         # Fit the PCA. Each colomns give us the projection through 1 component.
         pca_components = self.pca.fit_transform(scaled_data)
 
@@ -164,7 +233,7 @@ class RegionalExtremes(SharedConfig):
         )
 
         # Save the PCA model
-        pca_path = self.saving_path / "pca_matrix.pkl"
+        pca_path = self.config.saving_path / "pca_matrix.pkl"
         with open(pca_path, "wb") as f:
             pk.dump(self.pca, f)
 
@@ -186,6 +255,9 @@ class RegionalExtremes(SharedConfig):
         Returns:
         list of np.ndarray: List where each array contains the bin limits for each component.
         """
+        assert hasattr(
+            self.pca, "explained_variance_"
+        ), "PCA model has not been trained yet."
         assert (
             projected_data.shape[1] == self.n_components
         ), "projected_data should have the same number of columns as n_components"
@@ -211,17 +283,17 @@ class RegionalExtremes(SharedConfig):
             limits_bins[0].shape[0] == self.n_bins - 1
         ), "the limits do not fit the number of bins"
 
-        limits_bins_path = self.saving_path / "limits_bins.npy"
+        limits_bins_path = self.config.saving_path / "limits_bins.npy"
         np.save(limits_bins_path, limits_bins)
         return limits_bins
 
     def apply_pca(self, scaled_data):
-        """Compute the mean seasonal cycle (MSC) of n samples and scale it between 0 and 1. Then apply the PCA already fit on the new data.  Each time step of the msc is considered as an independent component. Nb of time_step used for the PCA computation = 366 / step_msc.
+        """Compute the mean seasonal cycle (MSC) of n samples and scale it between 0 and 1. Then apply the PCA already fit on the new data.  Each time step of the msc is considered as an independent component. Nb of time_step used for the PCA computation = 366 / time_resolution.
 
         Args:
             n_samples (int, optional): number of samples to fit the PCA. Defaults to 10. to 5.
         """
-        assert scaled_data.shape[1] == round(self.step_msc / 366) + 1
+        assert scaled_data.shape[1] == round(self.config.time_resolution / 366) + 1
         assert scaled_data.shape[0] == self.n_samples_training
         X = self.pca.transform(scaled_data)
         return X
@@ -255,22 +327,21 @@ class DatasetHandler(SharedConfig):
         index (str): The climatic or ecological index to be processed.
         n_samples (Union[int, None]): Number of samples to select.
         load_data (bool): Flag to determine if data should be loaded during initialization.
-        step_msc (int, optional): temporal resolution of the msc, to reduce computationnal workload. Defaults to 5.
+        time_resolution (int, optional): temporal resolution of the msc, to reduce computationnal workload. Defaults to 5.
         """
-
-        super().__init__(config)
-
+        self.config = config
         self.n_samples = n_samples
-        # TODO Check if the data are in the file. especially after training pca
-        self.max_data = None
-        self.min_data = None
+
+        self.max_data = self.config.max_data
+        self.min_data = self.config.min_data
+
         self.data = None
 
     def preprocess_data(self):
         """
         Preprocess data based on the index.
         """
-        if self.index in ["pei_30", "pei_90", "pei_180"]:
+        if self.config.index in ["pei_30", "pei_90", "pei_180"]:
             filepath = CLIMATIC_FILEPATH
             self.load_data(filepath)
         else:
@@ -295,12 +366,31 @@ class DatasetHandler(SharedConfig):
         Parameters:
         filepath (str): Path to the data file.
         """
-        self.data = xr.open_zarr(filepath)[[self.index]]
+        self.data = xr.open_zarr(filepath)[[self.config.index]]
         printt("Data loaded from {}".format(filepath))
 
     # Transform the longitude coordinates to -180 and 180
     def coordstolongitude(self, x):
         return ((x + 180) % 360) - 180
+
+    def compute_and_save_min_max_data(self, data):
+        assert (
+            self.max_data and self.min_data
+        ) is None, "the min and max of the data are already defined."
+        self.max_data = self.data[self.config.index].max().values
+        self.min_data = self.data[self.config.index].min().values
+
+        # Save min_data and max_data
+        min_max_data_path = self.config.saving_path / "min_max_data.json"
+        with open(min_max_data_path, "w") as f:
+            json.dump(
+                {
+                    "min_data": self.min_data.tolist(),
+                    "max_data": self.max_data.tolist(),
+                },
+                f,
+                indent=4,
+            )
 
     def randomly_select_data(self):
         """
@@ -336,7 +426,7 @@ class DatasetHandler(SharedConfig):
         """
         Apply transformations to the climatic data.
         """
-        assert self.index in [
+        assert self.config.index in [
             "pei_30",
             "pei_90",
             "pei_180",
@@ -384,70 +474,57 @@ class DatasetHandler(SharedConfig):
 
     def compute_and_scale_the_msc(self):
         """
-        compute the MSC of n samples and scale it between 0 and 1. Each time step of the msc is considered as an independent component. nb of time_step used for the PCA computation = 366 / step_msc.
+        compute the MSC of n samples and scale it between 0 and 1. Each values of the msc is considered
+        as an independent component. time_resolution reduce the resolution of the msc to reduce the computation workload during the computation. nb values = 366 / time_resolution.
         """
         assert (self.n_samples > 0) & (self.n_samples <= self.data.sizes["lonlat"])
 
         # Compute the MSC
         self.data["msc"] = (
-            self.data[self.index]
+            self.data[self.config.index]
             .groupby("time.dayofyear")
             .mean("time")
             .drop_vars(["lonlat", "longitude", "latitude"])
         )
 
-        # Scale the data between 0 and 1
-        # TODO Check if the data are in the file. especially after training pca
-        if (self.max_data and self.min_data) is None:
-            self.max_data = self.data[self.index].max().values
-            self.min_data = self.data[self.index].min().values
-
-        # Save min_data and max_data
-        min_max_data_path = self.saving_path / "min_max_data.json"
-        with open(min_max_data_path, "w") as f:
-            json.dump(
-                {
-                    "min_data": self.min_data.tolist(),
-                    "max_data": self.max_data.tolist(),
-                },
-                f,
-                indent=4,
-            )
-
         # reduce the temporal resolution
-        self.data = self.data["msc"].isel(dayofyear=slice(1, 366, self.step_msc))
+        self.data = self.data["msc"].isel(
+            dayofyear=slice(1, 366, self.config.time_resolution)
+        )
+
+        if (self.min_data and self.max_data) is None:
+            compute_and_save_min_max_data(self.data)
 
         # Scale the data between 0 and 1
         self.data = (self.min_data - self.data) / (self.max_data - self.min_data)
 
 
-class EcologicalRegionalExtremes:
-    def __init__(
-        self,
-        vegetation_index,
-        # isclimatic: bool,
-    ):
-        self.vegetation_index = vegetation_index
-        self.filepath = f"/Net/Groups/BGI/work_1/scratch/fluxcom/upscaling_inputs/MODIS_VI_perRegion061/{vegetation_index}/Groups_dyn_{vegetation_index}_MSC_snowfrac.zarr"
-        self.filename = f"Groups_dyn_{vegetation_index}_MSC_snowfrac"
+# class EcologicalRegionalExtremes:
+#     def __init__(
+#         self,
+#         vegetation_index,
+#         # isclimatic: bool,
+#     ):
+#         self.vegetation_index = vegetation_index
+#         self.filepath = f"/Net/Groups/BGI/work_1/scratch/fluxcom/upscaling_inputs/MODIS_VI_perRegion061/{vegetation_index}/Groups_dyn_{vegetation_index}_MSC_snowfrac.zarr"
+#         self.filename = f"Groups_dyn_{vegetation_index}_MSC_snowfrac"
+#
+#     def apply_transformations(self):
+#         # Load the MSC of MODIS
+#         ds = xr.open_zarr(self.filepath, consolidated=False)
+#         ds_msc = ds[self.filename].stack(
+#             {"lat": ["latchunk", "latstep_modis"], "lon": ["lonchunk", "lonstep_modis"]}
+#         )
+#
+#         # Select k locations randomly to train the PCA:
+#         lat_indices = random.choices(ds_msc.lat.values, k=3000)
+#         lon_indices = random.choices(ds_msc.lon.values, k=3000)
+#
+#         # Select the MSC of those locations:
+#         return
 
-    def apply_transformations(self):
-        # Load the MSC of MODIS
-        ds = xr.open_zarr(self.filepath, consolidated=False)
-        ds_msc = ds[self.filename].stack(
-            {"lat": ["latchunk", "latstep_modis"], "lon": ["lonchunk", "lonstep_modis"]}
-        )
 
-        # Select k locations randomly to train the PCA:
-        lat_indices = random.choices(ds_msc.lat.values, k=3000)
-        lon_indices = random.choices(ds_msc.lon.values, k=3000)
-
-        # Select the MSC of those locations:
-        return
-
-
-if __name__ == "__main__":
-    args = parser.parse_args()
+def main_train_pca(args):
     config = SharedConfig(args)
     dataset_processor = DatasetHandler(
         config=config,
@@ -464,5 +541,30 @@ if __name__ == "__main__":
         scaled_data=data_subset
     )
 
-    # data_subset = DatasetHandler(index=self.index, n_samples=None, load_data=load_data)
-    # projected_data = self.apply_pca(scaled_data=data_full)
+
+def main_define_limits(args):
+    config = SharedConfig(args)
+    config.path_load_model = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2014047_2024-07-18_16:02:30"
+    dataset_processor = DatasetHandler(
+        config=config,
+        n_samples=10,  # all the dataset
+    )
+    data = dataset_processor.preprocess_data()
+
+    extremes_processor = RegionalExtremes(
+        config=config,
+        n_components=args.n_components,
+        n_bins=args.n_bins,
+    )
+    projected_data = extremes_processor.apply_pca(scaled_data=data)
+    extremes_processor.define_limits_bins(self, projected_data)
+
+
+if __name__ == "__main__":
+    args = parser_arguments.parse_args()
+
+    # To train the PCA:
+    # main_train_pca(args)
+
+    # To define the limits:
+    main_define_limits(args)
