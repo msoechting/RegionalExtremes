@@ -1,4 +1,5 @@
 import xarray as xr
+from argparse import Namespace
 import numpy as np
 import json
 import random
@@ -11,7 +12,7 @@ import time
 import sys
 import os
 
-from utils import printt
+from utils import printt, int_or_none
 
 np.set_printoptions(threshold=sys.maxsize)
 
@@ -61,9 +62,9 @@ def parser_arguments():
 
     parser.add_argument(
         "--n_samples",
-        type=int,
+        type=int_or_none,
         default=10,
-        help="Select randomly n_samples**2.",
+        help="Select randomly n_samples**2. Use 'None' for no limit.",
     )
 
     parser.add_argument(
@@ -94,7 +95,7 @@ def parser_arguments():
 class SharedConfig:
     def __init__(self, args: Namespace):
         """
-        Initialize ModelHandler with the provided arguments.
+        Initialize SharedConfig with the provided arguments.
 
         Args:
             args (argparse.Namespace): Parsed arguments from argparse.ArgumentParser().parse_args()
@@ -154,15 +155,19 @@ class SharedConfig:
         Args:
             args (argparse.Namespace): Parsed arguments from argparse.ArgumentParser().parse_args()
         """
+        assert self.path_load_model is None
         args_path = self.saving_path / "args.json"
         if not args_path.exists():
             with open(args_path, "w") as f:
                 json.dump(args.__dict__, f, indent=4)
+        printt("args saved. ")
 
     def _load_existing_model(self):
         """
         Load an existing model's PCA matrix and min-max data from files.
         """
+        self.path_load_model = Path(self.path_load_model) / self.index
+        self.saving_path = self.path_load_model
         self._load_min_max_data()
         self._load_pca_matrix()
 
@@ -217,7 +222,7 @@ class RegionalExtremes(SharedConfig):
         """
         assert self.config.path_load_model is None, "A model is already loaded."
         assert self.pca is None, "The PCA is already fitted."
-        assert scaled_data.shape[1] < 366
+        assert scaled_data.shape[1] == round(366 / self.config.time_resolution)
         assert (self.n_components > 0) & (
             self.n_components <= 366
         ), "n_components have to be in the range of days of a years"
@@ -236,35 +241,71 @@ class RegionalExtremes(SharedConfig):
         pca_path = self.config.saving_path / "pca_matrix.pkl"
         with open(pca_path, "wb") as f:
             pk.dump(self.pca, f)
+        printt("PCA saved.")
 
         return pca_components
 
-    def define_limits_bins(self, projected_data):
+    def apply_pca(self, scaled_data: np.ndarray) -> np.ndarray:
         """
-            Define the bounds of each bin on the projected data for each component.
+        Compute the mean seasonal cycle (MSC) of the samples and scale it between 0 and 1.
+        Then apply the PCA already fit on the new data. Each time step of the MSC is considered
+        as an independent component. The number of time steps used for the PCA computation
+        is 366 / time_resolution.
 
-
-            Ideally applied on the largest possible  amount of data to capture
-            the distribution in the projected space (especially minimum and maximum).
-            So ideally, fit the PCA with a subset of the data, then project the full dataset,
-            then define the bins on the full dataset projected.
-            n_bins is per components, so number of boxes = n_bins**n_components
         Args:
-        projected_data (np.ndarray): Data projected after PCA.
+            scaled_data (np.ndarray): Data to be transformed using PCA.
 
         Returns:
-        list of np.ndarray: List where each array contains the bin limits for each component.
+            np.ndarray: Transformed data after applying PCA.
         """
-        assert hasattr(
-            self.pca, "explained_variance_"
-        ), "PCA model has not been trained yet."
-        assert (
-            projected_data.shape[1] == self.n_components
-        ), "projected_data should have the same number of columns as n_components"
-        assert self.n_bins > 0, "n_bins should be greater than 0"
+        self._validate_scaled_data(scaled_data)
+        transformed_data = self.pca.transform(scaled_data)
+        return transformed_data
 
-        # Define bounds for each component  (n+1 bounds to divide each component in n bins)
-        limits_bins = [
+    def _validate_scaled_data(self, scaled_data: np.ndarray) -> None:
+        """Validates the scaled data to ensure it matches the expected shape."""
+        expected_shape = round(366 / self.config.time_resolution)
+        if scaled_data.shape[1] != expected_shape:
+            raise ValueError(
+                f"scaled_data should have {expected_shape} columns, but has {scaled_data.shape[1]} columns."
+            )
+
+    def define_limits_bins(self, projected_data: np.ndarray) -> list[np.ndarray]:
+        """
+        Define the bounds of each bin on the projected data for each component.
+        Ideally applied on the largest possible amount of data to capture
+        the distribution in the projected space (especially minimum and maximum).
+        Fit the PCA with a subset of the data, then project the full dataset,
+        then define the bins on the full dataset projected.
+        n_bins is per component, so number of boxes = n_bins**n_components
+
+        Args:
+            projected_data (np.ndarray): Data projected after PCA.
+
+        Returns:
+            list of np.ndarray: List where each array contains the bin limits for each component.
+        """
+        self._validate_inputs(projected_data)
+        limits_bins = self._calculate_limits_bins(projected_data)
+        self._save_limits_bins(limits_bins)
+        return limits_bins
+
+    def _validate_inputs(self, projected_data: np.ndarray) -> None:
+        """Validates the inputs for define_limits_bins."""
+        if not hasattr(self.pca, "explained_variance_"):
+            raise ValueError("PCA model has not been trained yet.")
+
+        if projected_data.shape[1] != self.n_components:
+            raise ValueError(
+                "projected_data should have the same number of columns as n_components"
+            )
+
+        if self.n_bins <= 0:
+            raise ValueError("n_bins should be greater than 0")
+
+    def _calculate_limits_bins(self, projected_data: np.ndarray) -> list[np.ndarray]:
+        """Calculates the limits bins for each component."""
+        return [
             np.linspace(
                 np.min(projected_data[:, component]),
                 np.max(projected_data[:, component]),
@@ -275,32 +316,24 @@ class RegionalExtremes(SharedConfig):
             for component in range(self.n_components)
         ]
 
-        # Save the limits of the bins
+    def _save_limits_bins(self, limits_bins: list[np.ndarray]) -> None:
+        """Saves the limits bins to a file."""
+        limits_bins_path = self.config.saving_path / "limits_bins.npy"
+        if os.path.exists(limits_bins_path):
+            raise FileExistsError(
+                f"The file {limits_bins_path} already exists. Rewriting is not allowed."
+            )
+        np.save(limits_bins_path, limits_bins)
+
+    # Function to find the box for multiple points
+    def find_bins(self, projected_data, limits_bins):
+        assert projected_data.shape[1] == len(limits_bins)
         assert (
             len(limits_bins) == self.n_components
         ), "the lenght of limits_bins list is not equal to the number of components"
         assert (
             limits_bins[0].shape[0] == self.n_bins - 1
         ), "the limits do not fit the number of bins"
-
-        limits_bins_path = self.config.saving_path / "limits_bins.npy"
-        np.save(limits_bins_path, limits_bins)
-        return limits_bins
-
-    def apply_pca(self, scaled_data):
-        """Compute the mean seasonal cycle (MSC) of n samples and scale it between 0 and 1. Then apply the PCA already fit on the new data.  Each time step of the msc is considered as an independent component. Nb of time_step used for the PCA computation = 366 / time_resolution.
-
-        Args:
-            n_samples (int, optional): number of samples to fit the PCA. Defaults to 10. to 5.
-        """
-        assert scaled_data.shape[1] == round(self.config.time_resolution / 366) + 1
-        assert scaled_data.shape[0] == self.n_samples_training
-        X = self.pca.transform(scaled_data)
-        return X
-
-    # Function to find the box for multiple points
-    def find_bins(self, projected_data, limits_bins):
-        assert projected_data.shape[1] == len(limits_bins)
 
         box_indices = np.zeros(
             (projected_data.shape[0], projected_data.shape[1]), dtype=int
@@ -353,7 +386,9 @@ class DatasetHandler(SharedConfig):
         if self.n_samples:
             self.randomly_select_data()
         else:
-            printt(f"Computation on the entire dataset. {self.data.shape[0]} samples")
+            printt(
+                f"Computation on the entire dataset. {self.data.sizes['latitude'] * self.data.sizes['longitude']} samples"
+            )
 
         self.apply_climatic_transformations()
         self.compute_and_scale_the_msc()
@@ -377,6 +412,8 @@ class DatasetHandler(SharedConfig):
         assert (
             self.max_data and self.min_data
         ) is None, "the min and max of the data are already defined."
+        assert self.config.path_load_model is None, "A model is already loaded."
+
         self.max_data = self.data[self.config.index].max().values
         self.min_data = self.data[self.config.index].min().values
 
@@ -391,6 +428,7 @@ class DatasetHandler(SharedConfig):
                 f,
                 indent=4,
             )
+        print("Min and max data saved.")
 
     def randomly_select_data(self):
         """
@@ -438,7 +476,7 @@ class DatasetHandler(SharedConfig):
         assert all(
             dim in self.data.sizes for dim in ("time", "latitude", "longitude")
         ), "Dimension missing"
-
+        # Ensure longitude values are within the expected range
         assert (
             (self.data.longitude >= 0) & (self.data.longitude <= 360)
         ).all(), "Longitude values should be in the range 0 to 360"
@@ -465,7 +503,6 @@ class DatasetHandler(SharedConfig):
         )
 
         # Remove latitude above polar circles.
-
         self.data = self.data.stack(lonlat=("longitude", "latitude")).transpose(
             "lonlat", "time", ...
         )
@@ -493,7 +530,7 @@ class DatasetHandler(SharedConfig):
         )
 
         if (self.min_data and self.max_data) is None:
-            compute_and_save_min_max_data(self.data)
+            self.compute_and_save_min_max_data(self.data)
 
         # Scale the data between 0 and 1
         self.data = (self.min_data - self.data) / (self.max_data - self.min_data)
@@ -543,11 +580,12 @@ def main_train_pca(args):
 
 
 def main_define_limits(args):
+    args.path_load_model = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2014047_2024-07-18_16:02:30"
+
     config = SharedConfig(args)
-    config.path_load_model = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2014047_2024-07-18_16:02:30"
     dataset_processor = DatasetHandler(
         config=config,
-        n_samples=10,  # all the dataset
+        n_samples=args.n_samples,  # all the dataset
     )
     data = dataset_processor.preprocess_data()
 
@@ -557,11 +595,11 @@ def main_define_limits(args):
         n_bins=args.n_bins,
     )
     projected_data = extremes_processor.apply_pca(scaled_data=data)
-    extremes_processor.define_limits_bins(self, projected_data)
+    extremes_processor.define_limits_bins(projected_data=projected_data)
 
 
 if __name__ == "__main__":
-    args = parser_arguments.parse_args()
+    args = parser_arguments().parse_args()
 
     # To train the PCA:
     # main_train_pca(args)
