@@ -1,4 +1,5 @@
 import xarray as xr
+import dask.array as da
 from argparse import Namespace
 import numpy as np
 import json
@@ -100,9 +101,10 @@ class SharedConfig:
         Args:
             args (argparse.Namespace): Parsed arguments from argparse.ArgumentParser().parse_args()
         """
+        # TODO optimize between new model and load model!
         self.index = args.index
-        self.time_resolution = args.time_resolution
         self.path_load_model = args.path_load_model
+        self.time_resolution = args.time_resolution
         self.pca = None
         self.min_data = None
         self.max_data = None
@@ -123,6 +125,11 @@ class SharedConfig:
         Args:
             args (argparse.Namespace): Parsed arguments from argparse.ArgumentParser().parse_args()
         """
+        self.time_resolution = args.time_resolution
+        self.pca = None
+        self.min_data = None
+        self.max_data = None
+
         self._set_saving_path(args)
         self._save_args(args)
 
@@ -144,7 +151,7 @@ class SharedConfig:
             / date_of_today
             / self.index
         )
-        print(f"The saving path is: {self.saving_path}")
+        printt(f"The saving path is: {self.saving_path}")
         self.saving_path.mkdir(parents=True, exist_ok=True)
         args.saving_path = str(self.saving_path)
 
@@ -167,9 +174,19 @@ class SharedConfig:
         Load an existing model's PCA matrix and min-max data from files.
         """
         self.path_load_model = Path(self.path_load_model) / self.index
-        self.saving_path = self.path_load_model
+        self._load_args()
         self._load_min_max_data()
         self._load_pca_matrix()
+
+    def _load_args(self):
+        """
+        Load args data from the file.
+        """
+        args_path = self.path_load_model / "args.json"
+        with open(args_path, "r") as f:
+            args = json.load(f)
+            for key, value in args.items():
+                setattr(self, key, value)
 
     def _load_min_max_data(self):
         """
@@ -259,7 +276,22 @@ class RegionalExtremes(SharedConfig):
             np.ndarray: Transformed data after applying PCA.
         """
         self._validate_scaled_data(scaled_data)
-        transformed_data = self.pca.transform(scaled_data)
+
+        # Define a function to apply PCA transform on a numpy array
+        # def pca_transform(x):
+        #    return self.pca.transform(x)
+
+        # # Use apply_ufunc for the transformation
+        transformed_data = xr.apply_ufunc(
+            self.pca.transform,
+            scaled_data.compute(),
+            input_core_dims=[["dayofyear"]],  # Apply PCA along 'dayofyear'
+            output_core_dims=[["component"]],  # Resulting dimension is 'component'
+        )
+
+        printt("Data are projected in the feature space.")
+        self._save_pca_projection(transformed_data)
+        printt("Projection saved.")
         return transformed_data
 
     def _validate_scaled_data(self, scaled_data: np.ndarray) -> None:
@@ -269,6 +301,15 @@ class RegionalExtremes(SharedConfig):
             raise ValueError(
                 f"scaled_data should have {expected_shape} columns, but has {scaled_data.shape[1]} columns."
             )
+
+    def _save_pca_projection(self, pca_projection) -> None:
+        """Saves the limits bins to a file."""
+        pca_projection_path = self.config.saving_path / "pca_projection.npy"
+        if os.path.exists(pca_projection_path):
+            raise FileExistsError(
+                f"The file {pca_projection_path} already exists. Rewriting is not allowed."
+            )
+        pca_projection.to_zarr(pca_projection_path)
 
     def define_limits_bins(self, projected_data: np.ndarray) -> list[np.ndarray]:
         """
@@ -390,7 +431,7 @@ class DatasetHandler(SharedConfig):
                 f"Computation on the entire dataset. {self.data.sizes['latitude'] * self.data.sizes['longitude']} samples"
             )
 
-        self.apply_standardize_climatic_dataset()
+        self.standardize_climatic_dataset()
         self.compute_and_scale_the_msc()
         return self.data
 
@@ -403,14 +444,13 @@ class DatasetHandler(SharedConfig):
         """
         # chunk_sizes = {"time": -1, "latitude": 100, "longitude": 100}
         self.data = xr.open_zarr(filepath)[[self.config.index]]
-        print(self.data)
         printt("Data loaded from {}".format(filepath))
 
     # Transform the longitude coordinates to -180 and 180
-    def coordstolongitude(self, x):
+    def _coordstolongitude(self, x):
         return ((x + 180) % 360) - 180
 
-    def compute_and_save_min_max_data(self, data):
+    def _compute_and_save_min_max_data(self, data):
         assert (
             self.max_data and self.min_data
         ) is None, "the min and max of the data are already defined."
@@ -430,7 +470,7 @@ class DatasetHandler(SharedConfig):
                 f,
                 indent=4,
             )
-        print("Min and max data saved.")
+        printt("Min and max data saved.")
 
     def randomly_select_data(self):
         """
@@ -449,7 +489,7 @@ class DatasetHandler(SharedConfig):
             lon_index = random.randint(0, self.data.longitude.sizes["longitude"] - 1)
             lat_index = random.randint(0, self.data.latitude.sizes["latitude"] - 1)
 
-            lon = self.coordstolongitude(self.data.longitude[lon_index].item())
+            lon = self._coordstolongitude(self.data.longitude[lon_index].item())
 
             lat = self.data.latitude[lat_index].item()
             # if location is on a land and not in the polar regions.
@@ -462,71 +502,7 @@ class DatasetHandler(SharedConfig):
             f"Randomly selected {self.data.sizes['latitude'] * self.data.sizes['longitude']} samples for training."
         )
 
-    def _standardize_climatic_dataset(self, data):
-        """
-        Apply transformations to the climatic data.
-        """
-        print(data)
-        # Remove the year 1950 because the data are inconsistent
-        data = data.sel(
-            time=slice(datetime.date(1951, 1, 1), datetime.date(2022, 12, 31))
-        )
-
-        # Remove data from the polar regions
-        data = data.where(np.abs(data.latitude) <= NORTH_POLE_THRESHOLD, drop=True)
-        data = data.where(np.abs(data.latitude) >= SOUTH_POLE_THRESHOLD, drop=True)
-
-        # Transform the longitude coordinates
-        data = data.roll(
-            longitude=180 * 4, roll_coords=True
-        )  # Shifts the data of longitude of 180*4 elements, elements that roll past the end are re-introduced
-
-        # Transform the longitude coordinates to -180 and 180
-        data = data.assign_coords(longitude=self.coordstolongitude(self.data.longitude))
-
-        # Remove latitude above polar circles.
-        data = data.stack(lonlat=("longitude", "latitude")).transpose(
-            "lonlat", "time", ...
-        )
-        # printt(f"Climatic data loaded with dimensions: {self.data.sizes}")
-        return data
-
-    # Main processing function
-
-    def apply_standardize_climatic_dataset(self):
-        # Apply the function to the entire dask array
-        printt("before")
-        chunk_sizes = {"time": -1, "latitude": 100, "longitude": 100}
-        self.data = self.data.chunk(chunk_sizes)
-        print("After chunking:", self.data.chunks)
-        transformed_data = self._standardize_climatic_dataset(self.data)
-        printt("after")
-        # At this point, transformed_data is still a dask array and no computation has been performed
-
-        print(f"Transformed data dimensions: {transformed_data.sizes}")
-        print(f"Chunk sizes: {transformed_data.chunks}")
-
-        return transformed_data
-
-    # Function to apply to each chunk
-    def process_chunk(chunk):
-        return self._standardize_climatic_dataset(chunk)
-
-    # Main processing function
-    def process_dataset(self):
-        # Ensure the dataset is chunked
-        chunked_data = self.data.chunk({"time": 100, "latitude": 50, "longitude": 50})
-
-        # Apply the function to each chunk
-        transformed_data = chunked_data.map_blocks(process_chunk, template=chunked_data)
-
-        # Compute the result
-        result = transformed_data.compute()
-
-        print(f"Climatic data loaded with dimensions: {result.sizes}")
-        return result
-
-    def apply_standardize_climatic_dataset_old(self):
+    def standardize_climatic_dataset(self):
         """
         Apply climatic transformations using xarray.apply_ufunc.
         """
@@ -547,26 +523,40 @@ class DatasetHandler(SharedConfig):
             (self.data.longitude >= 0) & (self.data.longitude <= 360)
         ).all(), "Longitude values should be in the range 0 to 360"
 
-        data = self.data
-        printt("all good")
-        transformed_data = xr.apply_ufunc(
-            self._standardize_climatic_dataset,
-            data,
-            # input_core_dims=[[]],  # Apply to whole dataset, adjust as necessary
-            # output_core_dims=[[]],  # Output the whole dataset, adjust as necessary
-            # vectorize=True,  # Vectorize the function
-            # dask="parallelized",  # Enable parallelization with Dask
+        # Remove the year 1950 because the data are inconsistent
+        self.data = self.data.sel(
+            time=slice(datetime.date(1951, 1, 1), datetime.date(2022, 12, 31))
         )
-        print("transformed")
-        self.data = transformed_data
+
+        # Remove data from the polar regions
+        self.data = self.data.where(
+            np.abs(self.data.latitude) <= NORTH_POLE_THRESHOLD, drop=True
+        )
+        self.data = self.data.where(
+            np.abs(self.data.latitude) >= SOUTH_POLE_THRESHOLD, drop=True
+        )
+
+        # Transform the longitude coordinates
+        self.data = self.data.roll(
+            longitude=180 * 4, roll_coords=True
+        )  # Shifts the data of longitude of 180*4 elements, elements that roll past the end are re-introduced
+
+        # Transform the longitude coordinates to -180 and 180
+        self.data = self.data.assign_coords(
+            longitude=self._coordstolongitude(self.data.longitude)
+        )
+
+        # Remove latitude above polar circles.
+        self.data = self.data.stack(lonlat=("longitude", "latitude")).transpose(
+            "lonlat", "time", ...
+        )
+        printt(f"Climatic data loaded with dimensions: {self.data.sizes}")
 
     def compute_and_scale_the_msc(self):
         """
         compute the MSC of n samples and scale it between 0 and 1. Each values of the msc is considered
         as an independent component. time_resolution reduce the resolution of the msc to reduce the computation workload during the computation. nb values = 366 / time_resolution.
         """
-        assert (self.n_samples > 0) & (self.n_samples <= self.data.sizes["lonlat"])
-
         # Compute the MSC
         self.data["msc"] = (
             self.data[self.config.index]
@@ -581,10 +571,11 @@ class DatasetHandler(SharedConfig):
         )
 
         if (self.min_data and self.max_data) is None:
-            self.compute_and_save_min_max_data(self.data)
+            self._compute_and_save_min_max_data(self.data)
 
         # Scale the data between 0 and 1
         self.data = (self.min_data - self.data) / (self.max_data - self.min_data)
+        printt(f"Data are scaled between 0 and 1.")
 
 
 # class EcologicalRegionalExtremes:
@@ -634,7 +625,7 @@ def main_define_limits(args):
     args.path_load_model = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2014047_2024-07-18_16:02:30"
 
     config = SharedConfig(args)
-    print("all es gut")
+
     dataset_processor = DatasetHandler(
         config=config,
         n_samples=args.n_samples,  # all the dataset
