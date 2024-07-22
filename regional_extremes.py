@@ -63,7 +63,7 @@ def parser_arguments():
     parser.add_argument(
         "--n_samples",
         type=int_or_none,
-        default=10,
+        default=None,
         help="Select randomly n_samples**2. Use 'None' for no limit.",
     )
 
@@ -390,7 +390,7 @@ class DatasetHandler(SharedConfig):
                 f"Computation on the entire dataset. {self.data.sizes['latitude'] * self.data.sizes['longitude']} samples"
             )
 
-        self.apply_climatic_transformations()
+        self.apply_standardize_climatic_dataset()
         self.compute_and_scale_the_msc()
         return self.data
 
@@ -401,7 +401,9 @@ class DatasetHandler(SharedConfig):
         Parameters:
         filepath (str): Path to the data file.
         """
+        # chunk_sizes = {"time": -1, "latitude": 100, "longitude": 100}
         self.data = xr.open_zarr(filepath)[[self.config.index]]
+        print(self.data)
         printt("Data loaded from {}".format(filepath))
 
     # Transform the longitude coordinates to -180 and 180
@@ -460,9 +462,73 @@ class DatasetHandler(SharedConfig):
             f"Randomly selected {self.data.sizes['latitude'] * self.data.sizes['longitude']} samples for training."
         )
 
-    def apply_climatic_transformations(self):
+    def _standardize_climatic_dataset(self, data):
         """
         Apply transformations to the climatic data.
+        """
+        print(data)
+        # Remove the year 1950 because the data are inconsistent
+        data = data.sel(
+            time=slice(datetime.date(1951, 1, 1), datetime.date(2022, 12, 31))
+        )
+
+        # Remove data from the polar regions
+        data = data.where(np.abs(data.latitude) <= NORTH_POLE_THRESHOLD, drop=True)
+        data = data.where(np.abs(data.latitude) >= SOUTH_POLE_THRESHOLD, drop=True)
+
+        # Transform the longitude coordinates
+        data = data.roll(
+            longitude=180 * 4, roll_coords=True
+        )  # Shifts the data of longitude of 180*4 elements, elements that roll past the end are re-introduced
+
+        # Transform the longitude coordinates to -180 and 180
+        data = data.assign_coords(longitude=self.coordstolongitude(self.data.longitude))
+
+        # Remove latitude above polar circles.
+        data = data.stack(lonlat=("longitude", "latitude")).transpose(
+            "lonlat", "time", ...
+        )
+        # printt(f"Climatic data loaded with dimensions: {self.data.sizes}")
+        return data
+
+    # Main processing function
+
+    def apply_standardize_climatic_dataset(self):
+        # Apply the function to the entire dask array
+        printt("before")
+        chunk_sizes = {"time": -1, "latitude": 100, "longitude": 100}
+        self.data = self.data.chunk(chunk_sizes)
+        print("After chunking:", self.data.chunks)
+        transformed_data = self._standardize_climatic_dataset(self.data)
+        printt("after")
+        # At this point, transformed_data is still a dask array and no computation has been performed
+
+        print(f"Transformed data dimensions: {transformed_data.sizes}")
+        print(f"Chunk sizes: {transformed_data.chunks}")
+
+        return transformed_data
+
+    # Function to apply to each chunk
+    def process_chunk(chunk):
+        return self._standardize_climatic_dataset(chunk)
+
+    # Main processing function
+    def process_dataset(self):
+        # Ensure the dataset is chunked
+        chunked_data = self.data.chunk({"time": 100, "latitude": 50, "longitude": 50})
+
+        # Apply the function to each chunk
+        transformed_data = chunked_data.map_blocks(process_chunk, template=chunked_data)
+
+        # Compute the result
+        result = transformed_data.compute()
+
+        print(f"Climatic data loaded with dimensions: {result.sizes}")
+        return result
+
+    def apply_standardize_climatic_dataset_old(self):
+        """
+        Apply climatic transformations using xarray.apply_ufunc.
         """
         assert self.config.index in [
             "pei_30",
@@ -481,33 +547,18 @@ class DatasetHandler(SharedConfig):
             (self.data.longitude >= 0) & (self.data.longitude <= 360)
         ).all(), "Longitude values should be in the range 0 to 360"
 
-        # Remove the year 1950 because the data are inconsistent
-        self.data = self.data.sel(
-            time=slice(datetime.date(1951, 1, 1), datetime.date(2022, 12, 31))
+        data = self.data
+        printt("all good")
+        transformed_data = xr.apply_ufunc(
+            self._standardize_climatic_dataset,
+            data,
+            # input_core_dims=[[]],  # Apply to whole dataset, adjust as necessary
+            # output_core_dims=[[]],  # Output the whole dataset, adjust as necessary
+            # vectorize=True,  # Vectorize the function
+            # dask="parallelized",  # Enable parallelization with Dask
         )
-
-        # Remove data from the polar regions
-        self.data = self.data.where(
-            np.abs(self.data.latitude) <= NORTH_POLE_THRESHOLD, drop=True
-        )
-        self.data = self.data.where(
-            np.abs(self.data.latitude) >= SOUTH_POLE_THRESHOLD, drop=True
-        )
-
-        # Transform the longitude coordinates
-        # Shifts the data of longitude of 180*4 elements, elements that roll past the end are re-introduced
-        self.data = self.data.roll(longitude=180 * 4, roll_coords=True)
-        # Transform the longitude coordinates to -180 and 180
-        self.data = self.data.assign_coords(
-            longitude=self.coordstolongitude(self.data.longitude)
-        )
-
-        # Remove latitude above polar circles.
-        self.data = self.data.stack(lonlat=("longitude", "latitude")).transpose(
-            "lonlat", "time", ...
-        )
-
-        printt(f"Climatic data loaded with dimensions: {self.data.sizes}")
+        print("transformed")
+        self.data = transformed_data
 
     def compute_and_scale_the_msc(self):
         """
@@ -583,6 +634,7 @@ def main_define_limits(args):
     args.path_load_model = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2014047_2024-07-18_16:02:30"
 
     config = SharedConfig(args)
+    print("all es gut")
     dataset_processor = DatasetHandler(
         config=config,
         n_samples=args.n_samples,  # all the dataset
