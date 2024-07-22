@@ -64,7 +64,7 @@ def parser_arguments():
     parser.add_argument(
         "--n_samples",
         type=int_or_none,
-        default=None,
+        default=10,
         help="Select randomly n_samples**2. Use 'None' for no limit.",
     )
 
@@ -187,6 +187,7 @@ class SharedConfig:
             args = json.load(f)
             for key, value in args.items():
                 setattr(self, key, value)
+        self.saving_path = Path(self.saving_path)
 
     def _load_min_max_data(self):
         """
@@ -277,21 +278,15 @@ class RegionalExtremes(SharedConfig):
         """
         self._validate_scaled_data(scaled_data)
 
-        # Define a function to apply PCA transform on a numpy array
-        # def pca_transform(x):
-        #    return self.pca.transform(x)
-
-        # # Use apply_ufunc for the transformation
         transformed_data = xr.apply_ufunc(
             self.pca.transform,
             scaled_data.compute(),
             input_core_dims=[["dayofyear"]],  # Apply PCA along 'dayofyear'
             output_core_dims=[["component"]],  # Resulting dimension is 'component'
         )
-
         printt("Data are projected in the feature space.")
-        self._save_pca_projection(transformed_data)
-        printt("Projection saved.")
+
+        self._save_pca_projection(new_da)
         return transformed_data
 
     def _validate_scaled_data(self, scaled_data: np.ndarray) -> None:
@@ -304,12 +299,33 @@ class RegionalExtremes(SharedConfig):
 
     def _save_pca_projection(self, pca_projection) -> None:
         """Saves the limits bins to a file."""
-        pca_projection_path = self.config.saving_path / "pca_projection.npy"
+        # Split the components into separate DataArrays
+        # Create a new coordinate for the 'component' dimension
+        component = np.arange(3)
+
+        # Reshape the data
+        reshaped_data = pca_projection.values.reshape(100, 3)
+
+        # Create the new DataArray
+        new_da = xr.DataArray(
+            data=reshaped_data,
+            dims=["lonlat", "component"],
+            coords={
+                "lonlat": transformed_data.lonlat,
+                "component": component,
+            },
+            name="pca",
+        )
+        # Unstack lonlat for longitude and latitude as dimensions
+        new_da = new_da.set_index(lonlat=["longitude", "latitude"]).unstack("lonlat")
+
+        pca_projection_path = self.config.saving_path / "pca_projection.zarr"
         if os.path.exists(pca_projection_path):
             raise FileExistsError(
                 f"The file {pca_projection_path} already exists. Rewriting is not allowed."
             )
-        pca_projection.to_zarr(pca_projection_path)
+        new_da.to_zarr(pca_projection_path)
+        printt("Projection saved.")
 
     def define_limits_bins(self, projected_data: np.ndarray) -> list[np.ndarray]:
         """
@@ -329,6 +345,7 @@ class RegionalExtremes(SharedConfig):
         self._validate_inputs(projected_data)
         limits_bins = self._calculate_limits_bins(projected_data)
         self._save_limits_bins(limits_bins)
+        printt("Limits are computed and saved.")
         return limits_bins
 
     def _validate_inputs(self, projected_data: np.ndarray) -> None:
