@@ -301,13 +301,7 @@ class RegionalExtremes(SharedConfig):
         """Saves the limits bins to a file."""
         # Split the components into separate DataArrays
         # Create a new coordinate for the 'component' dimension
-        component = np.arange(1, self.n_components)
-        print(pca_projection.sizes["lonlat"])
-        print(pca_projection.shape)
-        # Reshape the data
-        # reshaped_data = pca_projection.values.reshape(
-        #     pca_projection.sizes["lonlat"], self.n_components
-        # )
+        component = np.arange(1, self.n_components + 1)
 
         # Create the new DataArray
         pca_projection = xr.DataArray(
@@ -324,11 +318,15 @@ class RegionalExtremes(SharedConfig):
             lonlat=["longitude", "latitude"]
         ).unstack("lonlat")
 
+        # Saving path
         pca_projection_path = self.config.saving_path / "pca_projection.zarr"
+
         if os.path.exists(pca_projection_path):
             raise FileExistsError(
                 f"The file {pca_projection_path} already exists. Rewriting is not allowed."
             )
+
+        # Saving the data
         pca_projection.to_zarr(pca_projection_path)
         printt("Projection saved.")
 
@@ -420,7 +418,6 @@ class DatasetHandler(SharedConfig):
         Initialize DatasetHandler.
 
         Parameters:
-        index (str): The climatic or ecological index to be processed.
         n_samples (Union[int, None]): Number of samples to select.
         load_data (bool): Flag to determine if data should be loaded during initialization.
         time_resolution (int, optional): temporal resolution of the msc, to reduce computationnal workload. Defaults to 5.
@@ -645,7 +642,6 @@ def main_train_pca(args):
 
 def main_define_limits(args):
     args.path_load_model = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2014047_2024-07-18_16:02:30"
-
     config = SharedConfig(args)
 
     dataset_processor = DatasetHandler(
