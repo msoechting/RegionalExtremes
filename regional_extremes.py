@@ -13,7 +13,7 @@ import time
 import sys
 import os
 
-from utils import printt, int_or_none, is_in_europe
+from utils import printt, int_or_none
 
 np.set_printoptions(threshold=sys.maxsize)
 
@@ -33,11 +33,6 @@ def parser_arguments():
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument(
-        "--name",
-        type=str,
-        help="name of the experiment",
-    )
     parser.add_argument(
         "--id",
         type=str,
@@ -60,17 +55,13 @@ def parser_arguments():
     )
 
     parser.add_argument(
-        "--n_components",
-        type=int,
-        default=3,
-        help="Path to the raw MMEarth dataset folder (default: None). "
-        "If not given the environment variable MMEARTH_DIR will be used",
+        "--n_components", type=int, default=3, help="Number of component of the PCA."
     )
 
     parser.add_argument(
         "--n_samples",
         type=int_or_none,
-        default=5,
+        default=100,
         help="Select randomly n_samples**2. Use 'None' for no limit.",
     )
 
@@ -78,15 +69,15 @@ def parser_arguments():
         "--n_bins",
         type=int,
         default=25,
-        help="Path to the raw MMEarth dataset folder (default: None). "
-        "If not given the environment variable MMEARTH_DIR will be used",
+        help="number of bins to define the regions of similar seasonal cycle.",
     )
 
     parser.add_argument(
         "--saving_path",
         type=str,
-        default="./experiments/",
-        help="Path to save the experiments. ",
+        default=None,
+        help="Absolute path to save the experiments 'path/to/experiment'. "
+        "If None, the experiment will be save in a folder /experiment in the parent folder.",
     )
 
     parser.add_argument(
@@ -142,15 +133,10 @@ class SharedConfig:
             args.id = datetime.datetime.today().strftime("%Y-%m-%d_%H:%M:%S")
 
         if args.saving_path:
-            self.saving_path = (
-                Path(args.saving_path) / f"{args.id}_{args.name}" / self.index
-            )
+            self.saving_path = Path(args.saving_path) / {args.id} / self.index
         else:
             self.saving_path = (
-                Path(PARENT_DIRECTORY_PATH)
-                / "experiments/"
-                / f"{args.id}_{args.name}"
-                / self.index
+                Path(PARENT_DIRECTORY_PATH) / "experiments/" / args.id / self.index
             )
         printt(f"The saving path is: {self.saving_path}")
         self.saving_path.mkdir(parents=True, exist_ok=True)
@@ -220,7 +206,7 @@ class RegionalExtremes(SharedConfig):
         self.config = config
         self.n_components = n_components
         self.n_bins = n_bins
-        if self._load_existing_experiment:
+        if self.config.path_load_experiment:
             self._load_pca_matrix()
         else:
             # Initialize a new PCA.
@@ -230,7 +216,7 @@ class RegionalExtremes(SharedConfig):
         """
         Load PCA matrix from the file.
         """
-        pca_path = self.path_load_experiment / "pca_matrix.pkl"
+        pca_path = self.config.saving_path / "pca_matrix.pkl"
         with open(pca_path, "rb") as f:
             self.pca = pk.load(f)
 
@@ -244,8 +230,10 @@ class RegionalExtremes(SharedConfig):
             n_components (int, optional): number of components to compute the PCA. Defaults to 3.
             time_resolution (int, optional): temporal resolution of the msc, to reduce computationnal workload. Defaults to 5.
         """
+        assert not hasattr(
+            self.pca, "explained_variance_"
+        ), "A pca already have been fit."
         assert self.config.path_load_experiment is None, "A model is already loaded."
-        assert self.pca is None, "The PCA is already fitted."
         assert scaled_data.shape[1] == round(366 / self.config.time_resolution)
         assert (self.n_components > 0) & (
             self.n_components <= 366
@@ -320,7 +308,6 @@ class RegionalExtremes(SharedConfig):
         pca_projection = pca_projection.set_index(
             lonlat=["longitude", "latitude"]
         ).unstack("lonlat")
-        print(pca_projection.longitude)
 
         # Saving path
         pca_projection_path = self.config.saving_path / "pca_projection.zarr"
@@ -492,7 +479,7 @@ class DatasetHandler(SharedConfig):
             if (
                 globe.is_land(lat, lon)
                 and np.abs(lat) <= NORTH_POLE_THRESHOLD
-                and is_in_europe(lon, lat)
+                and self._is_in_europe(lon, lat)
             ):
                 lon_indices.append(lon_index)
                 lat_indices.append(lat_index)
@@ -505,6 +492,20 @@ class DatasetHandler(SharedConfig):
     # Transform the longitude coordinates to -180 and 180
     def _coordstolongitude(self, x):
         return ((x + 180) % 360) - 180
+
+    def _is_in_europe(self, lon, lat):
+        """
+        Check if the given longitude and latitude are within the bounds of Europe.
+        """
+        # Define Europe boundaries (these are approximate)
+        lon_min, lon_max = -31.266, 39.869  # Longitude boundaries
+        lat_min, lat_max = 27.636, 81.008  # Latitude boundaries
+
+        # Check if the point is within the defined boundaries
+        in_europe = (
+            (lon >= lon_min) & (lon <= lon_max) & (lat >= lat_min) & (lat <= lat_max)
+        )
+        return in_europe
 
     def standardize_climatic_dataset(self):
         """
@@ -532,12 +533,6 @@ class DatasetHandler(SharedConfig):
             time=slice(datetime.date(1951, 1, 1), datetime.date(2022, 12, 31))
         )
 
-        # Select European data
-        in_europe = is_in_europe(self.data.longitude, self.data.latitude)
-        printt("Data filtred to Europe.")
-        # Filter dataset to select Europe
-        self.data = self.data.where(in_europe, drop=True)
-
         # Filter data from the polar regions
         self.data = self.data.where(
             np.abs(self.data.latitude) <= NORTH_POLE_THRESHOLD, drop=True
@@ -545,7 +540,6 @@ class DatasetHandler(SharedConfig):
         self.data = self.data.where(
             np.abs(self.data.latitude) >= SOUTH_POLE_THRESHOLD, drop=True
         )
-
         # Transform the longitude coordinates
         self.data = self.data.roll(
             longitude=180 * 4, roll_coords=True
@@ -556,10 +550,17 @@ class DatasetHandler(SharedConfig):
             longitude=self._coordstolongitude(self.data.longitude)
         )
 
-        # Remove latitude above polar circles.
+        # Filter dataset to select Europe
+        # Select European data
+        in_europe = self._is_in_europe(self.data.longitude, self.data.latitude)
+        self.data = self.data.where(in_europe, drop=True)
+        printt("Data filtred to Europe.")
+
+        # Stack the dimensions
         self.data = self.data.stack(lonlat=("longitude", "latitude")).transpose(
             "lonlat", "time", ...
         )
+
         printt(f"Climatic data loaded with dimensions: {self.data.sizes}")
 
     def compute_and_scale_the_msc(self):
@@ -580,17 +581,18 @@ class DatasetHandler(SharedConfig):
             dayofyear=slice(1, 366, self.config.time_resolution)
         )
 
-        if (self.max_data and self.min_data) is None:
-            if self.config.path_load_experiment:
-                self._load_min_max_data()
-            else:
-                self._compute_and_save_min_max_data(self.data)
+        # Compute or load min and max of the data.
+        min_max_data_path = self.config.saving_path / "min_max_data.json"
+        if min_max_data_path.exists():
+            self._load_min_max_data(min_max_data_path)
+        else:
+            self._compute_and_save_min_max_data(min_max_data_path)
 
         # Scale the data between 0 and 1
         self.data = (self.min_data - self.data) / (self.max_data - self.min_data)
         printt(f"Data are scaled between 0 and 1.")
 
-    def _compute_and_save_min_max_data(self, data):
+    def _compute_and_save_min_max_data(self, min_max_data_path):
         assert (
             self.max_data and self.min_data
         ) is None, "the min and max of the data are already defined."
@@ -599,7 +601,6 @@ class DatasetHandler(SharedConfig):
         self.min_data = self.data.min().values
 
         # Save min_data and max_data
-        min_max_data_path = self.config.saving_path / "min_max_data.json"
         if not min_max_data_path.exists():
             with open(min_max_data_path, "w") as f:
                 json.dump(
@@ -612,13 +613,12 @@ class DatasetHandler(SharedConfig):
                 )
             printt("Min and max data saved.")
         else:
-            raise FileNotFoundError(f"{min_max_data_path} does not exist.")
+            raise FileNotFoundError(f"{min_max_data_path} already exist.")
 
-    def _load_min_max_data(self):
+    def _load_min_max_data(self, min_max_data_path):
         """
         Load min-max data from the file.
         """
-        min_max_data_path = self.config.saving_path / "min_max_data.json"
         with open(min_max_data_path, "r") as f:
             min_max_data = json.load(f)
             self.min_data = min_max_data["min_data"]
@@ -669,7 +669,7 @@ def main_train_pca(args):
 
     dataset_processor = DatasetHandler(
         config=config,
-        n_samples=10,  # all the dataset
+        n_samples=None,  # all the dataset
     )
     data = dataset_processor.preprocess_data()
 
