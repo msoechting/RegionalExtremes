@@ -64,7 +64,7 @@ def parser_arguments():
     parser.add_argument(
         "--n_samples",
         type=int_or_none,
-        default=10,
+        default=5,
         help="Select randomly n_samples**2. Use 'None' for no limit.",
     )
 
@@ -286,7 +286,7 @@ class RegionalExtremes(SharedConfig):
         )
         printt("Data are projected in the feature space.")
 
-        self._save_pca_projection(new_da)
+        self._save_pca_projection(transformed_data)
         return transformed_data
 
     def _validate_scaled_data(self, scaled_data: np.ndarray) -> None:
@@ -301,30 +301,35 @@ class RegionalExtremes(SharedConfig):
         """Saves the limits bins to a file."""
         # Split the components into separate DataArrays
         # Create a new coordinate for the 'component' dimension
-        component = np.arange(3)
-
+        component = np.arange(1, self.n_components)
+        print(pca_projection.sizes["lonlat"])
+        print(pca_projection.shape)
         # Reshape the data
-        reshaped_data = pca_projection.values.reshape(100, 3)
+        # reshaped_data = pca_projection.values.reshape(
+        #     pca_projection.sizes["lonlat"], self.n_components
+        # )
 
         # Create the new DataArray
-        new_da = xr.DataArray(
-            data=reshaped_data,
+        pca_projection = xr.DataArray(
+            data=pca_projection.values,
             dims=["lonlat", "component"],
             coords={
-                "lonlat": transformed_data.lonlat,
+                "lonlat": pca_projection.lonlat,
                 "component": component,
             },
             name="pca",
         )
         # Unstack lonlat for longitude and latitude as dimensions
-        new_da = new_da.set_index(lonlat=["longitude", "latitude"]).unstack("lonlat")
+        pca_projection = pca_projection.set_index(
+            lonlat=["longitude", "latitude"]
+        ).unstack("lonlat")
 
         pca_projection_path = self.config.saving_path / "pca_projection.zarr"
         if os.path.exists(pca_projection_path):
             raise FileExistsError(
                 f"The file {pca_projection_path} already exists. Rewriting is not allowed."
             )
-        new_da.to_zarr(pca_projection_path)
+        pca_projection.to_zarr(pca_projection_path)
         printt("Projection saved.")
 
     def define_limits_bins(self, projected_data: np.ndarray) -> list[np.ndarray]:
