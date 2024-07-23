@@ -13,7 +13,7 @@ import time
 import sys
 import os
 
-from utils import printt, int_or_none
+from utils import printt, int_or_none, is_in_europe
 
 np.set_printoptions(threshold=sys.maxsize)
 
@@ -34,11 +34,17 @@ def parser_arguments():
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
+        "--name",
+        type=str,
+        help="name of the experiment",
+    )
+    parser.add_argument(
         "--id",
         type=str,
         default=None,
-        help="id is time of the job launch and job_id",
+        help="id of the experiment is time of the job launch and job_id",
     )
+
     parser.add_argument(
         "--index",
         type=str,
@@ -78,15 +84,14 @@ def parser_arguments():
 
     parser.add_argument(
         "--saving_path",
-        type=Path,
+        type=str,
         default="./experiments/",
-        help="Path to the raw MMEarth dataset folder (default: None). "
-        "If not given the environment variable MMEARTH_DIR will be used",
+        help="Path to save the experiments. ",
     )
 
     parser.add_argument(
-        "--path_load_model",
-        type=Path,
+        "--path_load_experiment",
+        type=str,
         default=None,
         help="Path of the trained model folder.",
     )
@@ -101,24 +106,18 @@ class SharedConfig:
         Args:
             args (argparse.Namespace): Parsed arguments from argparse.ArgumentParser().parse_args()
         """
-        # TODO optimize between new model and load model!
-        self.index = args.index
-        self.path_load_model = args.path_load_model
-        self.time_resolution = args.time_resolution
-        self.pca = None
-        self.min_data = None
-        self.max_data = None
-
-        if self.path_load_model is None:
+        if args.path_load_experiment is None:
+            self.path_load_experiment = None
             printt(
                 "Initialisation of a new model, no path provided for an existing model."
             )
-            self._initialize_new_model(args)
+            self._initialize_new_experiment(args)
         else:
-            printt(f"Loading of the model path: {self.path_load_model}")
-            self._load_existing_model()
+            self.path_load_experiment = Path(args.path_load_experiment)
+            printt(f"Loading of the model path: {self.path_load_experiment}")
+            self._load_existing_experiment()
 
-    def _initialize_new_model(self, args: Namespace):
+    def _initialize_new_experiment(self, args: Namespace):
         """
         Initialize settings for a new model when no model is loaded.
 
@@ -126,9 +125,7 @@ class SharedConfig:
             args (argparse.Namespace): Parsed arguments from argparse.ArgumentParser().parse_args()
         """
         self.time_resolution = args.time_resolution
-        self.pca = None
-        self.min_data = None
-        self.max_data = None
+        self.index = args.index
 
         self._set_saving_path(args)
         self._save_args(args)
@@ -140,17 +137,21 @@ class SharedConfig:
         Args:
             args (argparse.Namespace): Parsed arguments from argparse.ArgumentParser().parse_args()
         """
-        if args.id:
-            date_of_today = args.id
-        else:
-            date_of_today = datetime.datetime.today().strftime("%Y-%m-%d_%H:%M:%S")
+        # Model launch with the command line. If model launch with sbatch, the id can be define using the id job + date
+        if not args.id:
+            args.id = datetime.datetime.today().strftime("%Y-%m-%d_%H:%M:%S")
 
-        self.saving_path = (
-            Path(PARENT_DIRECTORY_PATH)
-            / Path(args.saving_path)
-            / date_of_today
-            / self.index
-        )
+        if args.saving_path:
+            self.saving_path = (
+                Path(args.saving_path) / f"{args.id}_{args.name}" / self.index
+            )
+        else:
+            self.saving_path = (
+                Path(PARENT_DIRECTORY_PATH)
+                / "experiments/"
+                / f"{args.id}_{args.name}"
+                / self.index
+            )
         printt(f"The saving path is: {self.saving_path}")
         self.saving_path.mkdir(parents=True, exist_ok=True)
         args.saving_path = str(self.saving_path)
@@ -162,50 +163,43 @@ class SharedConfig:
         Args:
             args (argparse.Namespace): Parsed arguments from argparse.ArgumentParser().parse_args()
         """
-        assert self.path_load_model is None
+        assert self.path_load_experiment is None
+
+        # Saving path
         args_path = self.saving_path / "args.json"
+
+        # Convert to a dictionnary
+        args_dict = vars(args)
+        del args_dict["path_load_experiment"]
+
         if not args_path.exists():
             with open(args_path, "w") as f:
-                json.dump(args.__dict__, f, indent=4)
-        printt("args saved. ")
+                json.dump(args_dict, f, indent=4)
+        else:
+            raise f"{args_path} already exist."
+        printt(f"args saved, path: {args_path}")
 
-    def _load_existing_model(self):
+    def _load_existing_experiment(self):
         """
         Load an existing model's PCA matrix and min-max data from files.
         """
-        self.path_load_model = Path(self.path_load_model) / self.index
+        self.index = os.listdir(self.path_load_experiment)[0]
+        self.saving_path = self.path_load_experiment / self.index
         self._load_args()
-        self._load_min_max_data()
-        self._load_pca_matrix()
 
     def _load_args(self):
         """
         Load args data from the file.
         """
-        args_path = self.path_load_model / "args.json"
-        with open(args_path, "r") as f:
-            args = json.load(f)
-            for key, value in args.items():
-                setattr(self, key, value)
-        self.saving_path = Path(self.saving_path)
-
-    def _load_min_max_data(self):
-        """
-        Load min-max data from the file.
-        """
-        min_max_data_path = self.path_load_model / "min_max_data.json"
-        with open(min_max_data_path, "r") as f:
-            min_max_data = json.load(f)
-            self.min_data = min_max_data["min_data"]
-            self.max_data = min_max_data["max_data"]
-
-    def _load_pca_matrix(self):
-        """
-        Load PCA matrix from the file.
-        """
-        pca_path = self.path_load_model / "pca_matrix.pkl"
-        with open(pca_path, "rb") as f:
-            self.pca = pk.load(f)
+        args_path = self.saving_path / "args.json"
+        if args_path.exists():
+            with open(args_path, "r") as f:
+                args = json.load(f)
+                for key, value in args.items():
+                    setattr(self, key, value)
+            self.saving_path = Path(self.saving_path)
+        else:
+            raise FileNotFoundError(f"{args_path} does not exist.")
 
 
 class RegionalExtremes(SharedConfig):
@@ -226,7 +220,19 @@ class RegionalExtremes(SharedConfig):
         self.config = config
         self.n_components = n_components
         self.n_bins = n_bins
-        self.pca = self.config.pca
+        if self._load_existing_experiment:
+            self._load_pca_matrix()
+        else:
+            # Initialize a new PCA.
+            self.pca = PCA(n_components=self.n_components)
+
+    def _load_pca_matrix(self):
+        """
+        Load PCA matrix from the file.
+        """
+        pca_path = self.path_load_experiment / "pca_matrix.pkl"
+        with open(pca_path, "rb") as f:
+            self.pca = pk.load(f)
 
     def compute_pca_and_transform(
         self,
@@ -238,15 +244,12 @@ class RegionalExtremes(SharedConfig):
             n_components (int, optional): number of components to compute the PCA. Defaults to 3.
             time_resolution (int, optional): temporal resolution of the msc, to reduce computationnal workload. Defaults to 5.
         """
-        assert self.config.path_load_model is None, "A model is already loaded."
+        assert self.config.path_load_experiment is None, "A model is already loaded."
         assert self.pca is None, "The PCA is already fitted."
         assert scaled_data.shape[1] == round(366 / self.config.time_resolution)
         assert (self.n_components > 0) & (
             self.n_components <= 366
         ), "n_components have to be in the range of days of a years"
-
-        # Compute the PCA
-        self.pca = PCA(n_components=self.n_components)
 
         # Fit the PCA. Each colomns give us the projection through 1 component.
         pca_components = self.pca.fit_transform(scaled_data)
@@ -259,7 +262,7 @@ class RegionalExtremes(SharedConfig):
         pca_path = self.config.saving_path / "pca_matrix.pkl"
         with open(pca_path, "wb") as f:
             pk.dump(self.pca, f)
-        printt("PCA saved.")
+        printt(f"PCA saved: {pca_path}")
 
         return pca_components
 
@@ -317,6 +320,7 @@ class RegionalExtremes(SharedConfig):
         pca_projection = pca_projection.set_index(
             lonlat=["longitude", "latitude"]
         ).unstack("lonlat")
+        print(pca_projection.longitude)
 
         # Saving path
         pca_projection_path = self.config.saving_path / "pca_projection.zarr"
@@ -425,9 +429,8 @@ class DatasetHandler(SharedConfig):
         self.config = config
         self.n_samples = n_samples
 
-        self.max_data = self.config.max_data
-        self.min_data = self.config.min_data
-
+        self.max_data = None
+        self.min_data = None
         self.data = None
 
     def preprocess_data(self):
@@ -465,32 +468,6 @@ class DatasetHandler(SharedConfig):
         self.data = xr.open_zarr(filepath)[[self.config.index]]
         printt("Data loaded from {}".format(filepath))
 
-    # Transform the longitude coordinates to -180 and 180
-    def _coordstolongitude(self, x):
-        return ((x + 180) % 360) - 180
-
-    def _compute_and_save_min_max_data(self, data):
-        assert (
-            self.max_data and self.min_data
-        ) is None, "the min and max of the data are already defined."
-        assert self.config.path_load_model is None, "A model is already loaded."
-
-        self.max_data = self.data[self.config.index].max().values
-        self.min_data = self.data[self.config.index].min().values
-
-        # Save min_data and max_data
-        min_max_data_path = self.config.saving_path / "min_max_data.json"
-        with open(min_max_data_path, "w") as f:
-            json.dump(
-                {
-                    "min_data": self.min_data.tolist(),
-                    "max_data": self.max_data.tolist(),
-                },
-                f,
-                indent=4,
-            )
-        printt("Min and max data saved.")
-
     def randomly_select_data(self):
         """
         Randomly select a subset of the data based on n_samples.
@@ -512,14 +489,22 @@ class DatasetHandler(SharedConfig):
 
             lat = self.data.latitude[lat_index].item()
             # if location is on a land and not in the polar regions.
-            if globe.is_land(lat, lon) and np.abs(lat) <= NORTH_POLE_THRESHOLD:
+            if (
+                globe.is_land(lat, lon)
+                and np.abs(lat) <= NORTH_POLE_THRESHOLD
+                and is_in_europe(lon, lat)
+            ):
                 lon_indices.append(lon_index)
                 lat_indices.append(lat_index)
 
         self.data = self.data.isel(longitude=lon_indices, latitude=lat_indices)
         printt(
-            f"Randomly selected {self.data.sizes['latitude'] * self.data.sizes['longitude']} samples for training."
+            f"Randomly selected {self.data.sizes['latitude'] * self.data.sizes['longitude']} samples for training in Europe."
         )
+
+    # Transform the longitude coordinates to -180 and 180
+    def _coordstolongitude(self, x):
+        return ((x + 180) % 360) - 180
 
     def standardize_climatic_dataset(self):
         """
@@ -547,7 +532,13 @@ class DatasetHandler(SharedConfig):
             time=slice(datetime.date(1951, 1, 1), datetime.date(2022, 12, 31))
         )
 
-        # Remove data from the polar regions
+        # Select European data
+        in_europe = is_in_europe(self.data.longitude, self.data.latitude)
+        printt("Data filtred to Europe.")
+        # Filter dataset to select Europe
+        self.data = self.data.where(in_europe, drop=True)
+
+        # Filter data from the polar regions
         self.data = self.data.where(
             np.abs(self.data.latitude) <= NORTH_POLE_THRESHOLD, drop=True
         )
@@ -589,12 +580,49 @@ class DatasetHandler(SharedConfig):
             dayofyear=slice(1, 366, self.config.time_resolution)
         )
 
-        if (self.min_data and self.max_data) is None:
-            self._compute_and_save_min_max_data(self.data)
+        if (self.max_data and self.min_data) is None:
+            if self.config.path_load_experiment:
+                self._load_min_max_data()
+            else:
+                self._compute_and_save_min_max_data(self.data)
 
         # Scale the data between 0 and 1
         self.data = (self.min_data - self.data) / (self.max_data - self.min_data)
         printt(f"Data are scaled between 0 and 1.")
+
+    def _compute_and_save_min_max_data(self, data):
+        assert (
+            self.max_data and self.min_data
+        ) is None, "the min and max of the data are already defined."
+        assert self.config.path_load_experiment is None, "A model is already loaded."
+        self.max_data = self.data.max().values
+        self.min_data = self.data.min().values
+
+        # Save min_data and max_data
+        min_max_data_path = self.config.saving_path / "min_max_data.json"
+        if not min_max_data_path.exists():
+            with open(min_max_data_path, "w") as f:
+                json.dump(
+                    {
+                        "min_data": self.min_data.tolist(),
+                        "max_data": self.max_data.tolist(),
+                    },
+                    f,
+                    indent=4,
+                )
+            printt("Min and max data saved.")
+        else:
+            raise FileNotFoundError(f"{min_max_data_path} does not exist.")
+
+    def _load_min_max_data(self):
+        """
+        Load min-max data from the file.
+        """
+        min_max_data_path = self.config.saving_path / "min_max_data.json"
+        with open(min_max_data_path, "r") as f:
+            min_max_data = json.load(f)
+            self.min_data = min_max_data["min_data"]
+            self.max_data = min_max_data["max_data"]
 
 
 # class EcologicalRegionalExtremes:
@@ -639,9 +667,18 @@ def main_train_pca(args):
         scaled_data=data_subset
     )
 
+    dataset_processor = DatasetHandler(
+        config=config,
+        n_samples=10,  # all the dataset
+    )
+    data = dataset_processor.preprocess_data()
+
+    projected_data = extremes_processor.apply_pca(scaled_data=data)
+    extremes_processor.define_limits_bins(projected_data=projected_data)
+
 
 def main_define_limits(args):
-    args.path_load_model = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2014047_2024-07-18_16:02:30"
+    # args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2014047_2024-07-18_16:02:30"
     config = SharedConfig(args)
 
     dataset_processor = DatasetHandler(
@@ -663,7 +700,7 @@ if __name__ == "__main__":
     args = parser_arguments().parse_args()
 
     # To train the PCA:
-    # main_train_pca(args)
+    main_train_pca(args)
 
     # To define the limits:
-    main_define_limits(args)
+    # main_define_limits(args)
