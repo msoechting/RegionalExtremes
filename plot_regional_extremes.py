@@ -1,7 +1,7 @@
 import xarray as xr
 import numpy as np
 import matplotlib.pyplot as plt
-import cartopy.crs as ccrs
+import cartopy
 
 
 from regional_extremes import SharedConfig
@@ -32,39 +32,46 @@ class PlotExtremes(SharedConfig):
         filepath (str): Path to the data file.
         """
         projection_path = self.config.saving_path / "pca_projection.zarr"
-        self.pca_projection = xr.open_zarr(projection_path).pca
+        data = xr.open_zarr(projection_path)
+        self.pca_projection = data.pca
+        self.explained_variance = data.explained_variance
         printt("Projection loaded from {}".format(projection_path))
 
-    def plot_map(self):
-        # Reshape the data into a 2D array for each component
-        red = self.pca_projection.isel(component=0).values
-        green = self.pca_projection.isel(component=1).values
-        blue = self.pca_projection.isel(component=2).values
+    def plot_map_component(self):
+        # Normalize the explained variance
+        normalized_variance = (
+            self.explained_variance.explained_variance
+            / self.explained_variance.explained_variance.sum()
+        )
 
         # Normalize the data to the range [0, 1]
-        def _normalization(band):
-            print(np.quantile(band, q=0.05), np.quantile(band, q=0.95))
-            return (band - np.min(band)) / (np.max(band) - np.min(band))
-            # return (band - np.quantile(band, q=0.05)) / (
-            #     np.quantile(band, q=0.95) - np.quantile(band, q=0.05)
-            # )
+        def _normalization(index):
+            band = self.pca_projection.isel(component=index).values
 
-        normalized_red = _normalization(red)
-        normalized_green = _normalization(green)
-        normalized_blue = _normalization(blue)
+            # (band - np.min(band)) / (np.max(band) - np.min(band))
+            # We normalize with the 5% and 95% quantiles due to outliers.
+            normalized_band = (band - np.quantile(band, q=0.05)) / (
+                np.quantile(band, q=0.95) - np.quantile(band, q=0.05)
+            )
+            # We normalize the color by feature importance
+            return normalized_band  # * normalized_variance.sel(component=index).values
+
+        normalized_red = _normalization(0)  # Red is the first component
+        normalized_green = _normalization(1)  # Green is the second component
+        normalized_blue = _normalization(2)  # blue is the third component
 
         # Stack the components into a 3D array
         rgb_normalized = np.dstack((normalized_red, normalized_green, normalized_blue))
 
         # Set up the map projection
-        projection = ccrs.PlateCarree()
+        projection = cartopy.crs.PlateCarree()
 
         # Create the figure and axis
         fig, ax = plt.subplots(figsize=(12, 8), subplot_kw={"projection": projection})
 
         # Add coastlines and set global extent
         ax.coastlines()
-        ax.set_global()
+        ax.add_feature(cartopy.feature.OCEAN, zorder=100, edgecolor="k")
 
         # Plot the RGB data
         img_extent = (
@@ -73,7 +80,8 @@ class PlotExtremes(SharedConfig):
             self.pca_projection.latitude.min(),
             self.pca_projection.latitude.max(),
         )
-        print(img_extent)
+
+        ax.set_extent(img_extent, crs=projection)
         ax.imshow(
             rgb_normalized, origin="lower", extent=img_extent, transform=projection
         )
@@ -81,23 +89,59 @@ class PlotExtremes(SharedConfig):
         # Add a title
         plt.title("RGB Components on Earth Map")
 
-        map_saving_path = self.saving_path / "map_components_rgb.png"
+        map_saving_path = self.saving_path / "map_components_rgb_rgb.png"
         plt.savefig(map_saving_path)
         printt("Plot saved")
 
         # Show the plot
         plt.show()
 
-    def plot_3D_limits(self):
+    def plot_boxes_msc(box_indices, n_bins):
+        # find_boxes(pca_components, pca_bins)
+        # Convert box indices to RGB colors
+        # Normalize indices to the range [0, 1] for RGB
+        norm_box_indices = box_indices / (n_bins + 1)
+        colors = norm_box_indices
+
+        # Check that the colors are within the 0-1 range
+        print("Minimum color value:", colors.min())
+        print("Maximum color value:", colors.max())
+
+        # Ensure all values are within the [0, 1] range
+        assert (
+            colors.min() >= 0 and colors.max() <= 1
+        ), "RGBA values should be within the 0-1 range"
+
+        # Plotting
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection="3d")
+
+        # Scatter plot
+        sc = ax.scatter(
+            pca_components[:, 0],
+            pca_components[:, 1],
+            pca_components[:, 2],
+            c=colors,
+            s=50,
+            edgecolor="k",
+        )
+
+        # Adding labels and title
+        ax.set_xlabel("PCA Component 1")
+        ax.set_ylabel("PCA Component 2")
+        ax.set_zlabel("PCA Component 3")
+        ax.set_title("3D PCA Projection with RGB Colors")
+        ax.legend()
+        plt.show()
         return
 
 
 if __name__ == "__main__":
     args = parser_arguments().parse_args()
 
-    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-07-23_13:06:53_Europe"
+    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-07-24_16:25:15_data_normalized_per_day"
     config = SharedConfig(args)
 
     plot = PlotExtremes(config=config)
     plot.load_pca_projection()
-    plot.plot_map()
+    plot.plot_map_component()

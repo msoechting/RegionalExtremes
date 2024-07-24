@@ -6,12 +6,14 @@ import json
 import random
 import datetime
 from sklearn.decomposition import PCA
+import pandas as pd
 import pickle as pk
 from pathlib import Path
 from typing import Union
 import time
 import sys
 import os
+
 
 from utils import printt, int_or_none
 
@@ -41,12 +43,27 @@ def parser_arguments():
     )
 
     parser.add_argument(
+        "--name",
+        type=str,
+        default=None,
+        help="name_of_the_experiment",
+    )
+
+    parser.add_argument(
         "--index",
         type=str,
         default="pei_180",
         help=" The climatic or ecological index to be processed (default: pei_180). "
         "Index available:\n -Climatic: 'pei_30', 'pei_90', 'pei_180'. \n Ecological: 'None.",
     )
+
+    parser.add_argument(
+        "--compute_variance",
+        type=bool,
+        default=False,
+        help="compute variance",
+    )
+
     parser.add_argument(
         "--time_resolution",
         type=int,
@@ -117,6 +134,7 @@ class SharedConfig:
         """
         self.time_resolution = args.time_resolution
         self.index = args.index
+        self.compute_variance = args.compute_variance
 
         self._set_saving_path(args)
         self._save_args(args)
@@ -135,9 +153,17 @@ class SharedConfig:
         if args.saving_path:
             self.saving_path = Path(args.saving_path) / {args.id} / self.index
         else:
-            self.saving_path = (
-                Path(PARENT_DIRECTORY_PATH) / "experiments/" / args.id / self.index
-            )
+            if args.name:
+                self.saving_path = (
+                    Path(PARENT_DIRECTORY_PATH)
+                    / "experiments/"
+                    / f"{args.id}_{args.name}"
+                    / self.index
+                )
+            else:
+                self.saving_path = (
+                    Path(PARENT_DIRECTORY_PATH) / "experiments/" / args.id / self.index
+                )
         printt(f"The saving path is: {self.saving_path}")
         self.saving_path.mkdir(parents=True, exist_ok=True)
         args.saving_path = str(self.saving_path)
@@ -169,7 +195,12 @@ class SharedConfig:
         """
         Load an existing model's PCA matrix and min-max data from files.
         """
-        self.index = os.listdir(self.path_load_experiment)[0]
+        # Filter out 'slurm_files' in the path to load experiment to find the index used.
+        self.index = [
+            folder
+            for folder in os.listdir(self.path_load_experiment)
+            if folder != "slurm_files"
+        ][0]
         self.saving_path = self.path_load_experiment / self.index
         self._load_args()
 
@@ -196,7 +227,8 @@ class RegionalExtremes(SharedConfig):
         n_bins: int,
     ):
         """
-        Compute the regional extremes by defining boxes of similar region using a PCA computed on the mean seasonal cycle of the samples.
+        Compute the regional extremes by defining boxes of similar region using a PCA computed on the mean seasonal cycle of the samples. Each values of the msc is considered
+        as an independent component.
 
         Args:
             config (SharedConfig): Shared attributes across the classes.
@@ -234,16 +266,17 @@ class RegionalExtremes(SharedConfig):
             self.pca, "explained_variance_"
         ), "A pca already have been fit."
         assert self.config.path_load_experiment is None, "A model is already loaded."
-        assert scaled_data.shape[1] == round(366 / self.config.time_resolution)
+        assert scaled_data.dayofyear.shape[0] == round(
+            366 / self.config.time_resolution
+        )
         assert (self.n_components > 0) & (
             self.n_components <= 366
         ), "n_components have to be in the range of days of a years"
-
         # Fit the PCA. Each colomns give us the projection through 1 component.
         pca_components = self.pca.fit_transform(scaled_data)
 
         printt(
-            f"PCA performed. sum explained variance: {sum(self.pca.explained_variance_ratio_)}"
+            f"PCA performed. sum explained variance: {sum(self.pca.explained_variance_ratio_)}. {self.pca.explained_variance_ratio_})"
         )
 
         # Save the PCA model
@@ -292,7 +325,7 @@ class RegionalExtremes(SharedConfig):
         """Saves the limits bins to a file."""
         # Split the components into separate DataArrays
         # Create a new coordinate for the 'component' dimension
-        component = np.arange(1, self.n_components + 1)
+        component = np.arange(self.n_components)
 
         # Create the new DataArray
         pca_projection = xr.DataArray(
@@ -308,6 +341,14 @@ class RegionalExtremes(SharedConfig):
         pca_projection = pca_projection.set_index(
             lonlat=["longitude", "latitude"]
         ).unstack("lonlat")
+
+        # Explained variance for each component
+        explained_variance = xr.DataArray(
+            self.pca.explained_variance_ratio_,  # Example values for explained variance
+            dims=["component"],
+            coords={"component": component},
+        )
+        pca_projection["explained_variance"] = explained_variance
 
         # Saving path
         pca_projection_path = self.config.saving_path / "pca_projection.zarr"
@@ -394,6 +435,15 @@ class RegionalExtremes(SharedConfig):
             box_indices[:, i] = np.digitize(projected_data[:, i], limits_bin)
 
         return box_indices
+
+    def _save_bins(self, box_indices):
+        """Saves the bins to a file."""
+        boxes_path = self.config.saving_path / "boxes.ny"
+        if os.path.exists(limits_bins_path):
+            raise FileExistsError(
+                f"The file {limits_bins_path} already exists. Rewriting is not allowed."
+            )
+        boxes.to_arr(boxes_path)
 
     def apply_threshold():
         raise NotImplementedError()
@@ -528,9 +578,9 @@ class DatasetHandler(SharedConfig):
             (self.data.longitude >= 0) & (self.data.longitude <= 360)
         ).all(), "Longitude values should be in the range 0 to 360"
 
-        # Remove the year 1950 because the data are inconsistent
+        # Remove the years before 1970 due to quality
         self.data = self.data.sel(
-            time=slice(datetime.date(1951, 1, 1), datetime.date(2022, 12, 31))
+            time=slice(datetime.date(1970, 1, 1), datetime.date(2030, 12, 31))
         )
 
         # Filter data from the polar regions
@@ -565,8 +615,8 @@ class DatasetHandler(SharedConfig):
 
     def compute_and_scale_the_msc(self):
         """
-        compute the MSC of n samples and scale it between 0 and 1. Each values of the msc is considered
-        as an independent component. time_resolution reduce the resolution of the msc to reduce the computation workload during the computation. nb values = 366 / time_resolution.
+        compute the MSC of n samples and scale it between 0 and 1.
+        Time_resolution reduce the resolution of the msc to reduce the computation workload during the computation. nb values = 366 / time_resolution.
         """
         # Compute the MSC
         self.data["msc"] = (
@@ -575,21 +625,50 @@ class DatasetHandler(SharedConfig):
             .mean("time")
             .drop_vars(["lonlat", "longitude", "latitude"])
         )
+        if not self.config.compute_variance:
+            # Reduce the temporal resolution
+            self.data = self.data["msc"].isel(
+                dayofyear=slice(1, 366, self.config.time_resolution)
+            )
+        else:
+            # Compute the variance seasonal cycle
+            self.data["vsc"] = (
+                self.data[self.config.index]
+                .groupby("time.dayofyear")
+                .var("time")
+                .drop_vars(["lonlat", "longitude", "latitude"])
+            )
 
-        # reduce the temporal resolution
-        self.data = self.data["msc"].isel(
-            dayofyear=slice(1, 366, self.config.time_resolution)
-        )
+            # Instead of adding 370, create a new coordinate
+            days_in_year = len(self.data["vsc"].dayofyear)
+            new_dayofyear = pd.RangeIndex(days_in_year + 1, 2 * days_in_year + 1)
+
+            self.data["vsc"] = self.data["vsc"].assign_coords(dayofyear=new_dayofyear)
+
+            # Concatenate msc and vsc along the dayofyear dimension
+            self.data["msc_vsc"] = xr.concat(
+                [self.data["msc"], self.data["vsc"]], dim="dayofyear"
+            )
+
+            self.data = self.data["msc_vsc"].isel(
+                dayofyear=slice(1, 366 + 370, self.config.time_resolution)
+            )
+
+            printt("Variance is computed")
 
         # Compute or load min and max of the data.
-        min_max_data_path = self.config.saving_path / "min_max_data.json"
+        min_max_data_path = self.config.saving_path / "min_max_data.zarr"
         if min_max_data_path.exists():
             self._load_min_max_data(min_max_data_path)
         else:
             self._compute_and_save_min_max_data(min_max_data_path)
 
         # Scale the data between 0 and 1
-        self.data = (self.min_data - self.data) / (self.max_data - self.min_data)
+
+        self.data = (self.min_data.broadcast_like(self.data) - self.data) / (
+            self.max_data.broadcast_like(self.data)
+            - self.min_data.broadcast_like(self.data)
+        )
         printt(f"Data are scaled between 0 and 1.")
 
     def _compute_and_save_min_max_data(self, min_max_data_path):
@@ -597,20 +676,18 @@ class DatasetHandler(SharedConfig):
             self.max_data and self.min_data
         ) is None, "the min and max of the data are already defined."
         assert self.config.path_load_experiment is None, "A model is already loaded."
-        self.max_data = self.data.max().values
-        self.min_data = self.data.min().values
-
+        self.max_data = self.data.max(dim=["lonlat"])
+        self.min_data = self.data.min(dim=["lonlat"])
         # Save min_data and max_data
         if not min_max_data_path.exists():
-            with open(min_max_data_path, "w") as f:
-                json.dump(
-                    {
-                        "min_data": self.min_data.tolist(),
-                        "max_data": self.max_data.tolist(),
-                    },
-                    f,
-                    indent=4,
-                )
+            min_max_data = xr.Dataset(
+                {
+                    "max_data": self.max_data,
+                    "min_data": self.min_data,
+                },
+                coords={"dayofyear": self.data.coords["dayofyear"].values},
+            )
+            min_max_data.to_zarr(min_max_data_path)
             printt("Min and max data saved.")
         else:
             raise FileNotFoundError(f"{min_max_data_path} already exist.")
@@ -619,10 +696,9 @@ class DatasetHandler(SharedConfig):
         """
         Load min-max data from the file.
         """
-        with open(min_max_data_path, "r") as f:
-            min_max_data = json.load(f)
-            self.min_data = min_max_data["min_data"]
-            self.max_data = min_max_data["max_data"]
+        min_max_data = xr.open_zarr(min_max_data_path)
+        self.min_data = min_max_data.min_data
+        self.max_data = min_max_data.max_data
 
 
 # class EcologicalRegionalExtremes:
@@ -654,14 +730,14 @@ def main_train_pca(args):
     config = SharedConfig(args)
     dataset_processor = DatasetHandler(
         config=config,
-        n_samples=args.n_samples,
+        n_samples=5,  # args.n_samples,
     )
     data_subset = dataset_processor.preprocess_data()
 
     extremes_processor = RegionalExtremes(
         config=config,
         n_components=args.n_components,
-        n_bins=args.n_bins,
+        n_bins=5,  # args.n_bins,
     )
     projected_data = extremes_processor.compute_pca_and_transform(
         scaled_data=data_subset
@@ -669,7 +745,7 @@ def main_train_pca(args):
 
     dataset_processor = DatasetHandler(
         config=config,
-        n_samples=None,  # all the dataset
+        n_samples=5,  # None,  # None,  # all the dataset
     )
     data = dataset_processor.preprocess_data()
 
@@ -678,12 +754,11 @@ def main_train_pca(args):
 
 
 def main_define_limits(args):
-    # args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2014047_2024-07-18_16:02:30"
+    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-07-24_11:17:05_Europe2"
     config = SharedConfig(args)
 
     dataset_processor = DatasetHandler(
-        config=config,
-        n_samples=args.n_samples,  # all the dataset
+        config=config, n_samples=None  # args.n_samples,  # all the dataset
     )
     data = dataset_processor.preprocess_data()
 
@@ -698,6 +773,8 @@ def main_define_limits(args):
 
 if __name__ == "__main__":
     args = parser_arguments().parse_args()
+    args.compute_variance = True
+    args.name = "data_normalized_per_day"
 
     # To train the PCA:
     main_train_pca(args)
