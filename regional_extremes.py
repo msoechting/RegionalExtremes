@@ -15,7 +15,7 @@ import sys
 import os
 
 
-from utils import printt, int_or_none
+from utils import initialize_logger, printt, int_or_none
 
 np.set_printoptions(threshold=sys.maxsize)
 
@@ -116,13 +116,9 @@ class SharedConfig:
         """
         if args.path_load_experiment is None:
             self.path_load_experiment = None
-            printt(
-                "Initialisation of a new model, no path provided for an existing model."
-            )
             self._initialize_new_experiment(args)
         else:
             self.path_load_experiment = Path(args.path_load_experiment)
-            printt(f"Loading of the model path: {self.path_load_experiment}")
             self._load_existing_experiment()
 
     def _initialize_new_experiment(self, args: Namespace):
@@ -137,6 +133,9 @@ class SharedConfig:
         self.compute_variance = args.compute_variance
 
         self._set_saving_path(args)
+        initialize_logger(self.saving_path)
+        printt("Initialisation of a new model, no path provided for an existing model.")
+        printt(f"The saving path is: {self.saving_path}")
         self._save_args(args)
 
     def _set_saving_path(self, args: Namespace):
@@ -164,7 +163,6 @@ class SharedConfig:
                 self.saving_path = (
                     Path(PARENT_DIRECTORY_PATH) / "experiments/" / args.id / self.index
                 )
-        printt(f"The saving path is: {self.saving_path}")
         self.saving_path.mkdir(parents=True, exist_ok=True)
         args.saving_path = str(self.saving_path)
 
@@ -202,6 +200,10 @@ class SharedConfig:
             if folder != "slurm_files"
         ][0]
         self.saving_path = self.path_load_experiment / self.index
+
+        # Initialise the logger
+        initialize_logger(self.saving_path)
+        printt(f"Loading of the model path: {self.path_load_experiment}")
         self._load_args()
 
     def _load_args(self):
@@ -266,9 +268,9 @@ class RegionalExtremes(SharedConfig):
             self.pca, "explained_variance_"
         ), "A pca already have been fit."
         assert self.config.path_load_experiment is None, "A model is already loaded."
-        assert scaled_data.dayofyear.shape[0] == round(
-            366 / self.config.time_resolution
-        )
+        # sassert scaled_data.dayofyear.shape[0] == round(
+        # s    366 / self.config.time_resolution
+        # s)
         assert (self.n_components > 0) & (
             self.n_components <= 366
         ), "n_components have to be in the range of days of a years"
@@ -315,7 +317,10 @@ class RegionalExtremes(SharedConfig):
 
     def _validate_scaled_data(self, scaled_data: np.ndarray) -> None:
         """Validates the scaled data to ensure it matches the expected shape."""
-        expected_shape = round(366 / self.config.time_resolution)
+        if self.config.compute_variance:
+            expected_shape = round(366 / self.config.time_resolution) * 2 + 1
+        else:
+            expected_shape = round(366 / self.config.time_resolution)
         if scaled_data.shape[1] != expected_shape:
             raise ValueError(
                 f"scaled_data should have {expected_shape} columns, but has {scaled_data.shape[1]} columns."
@@ -639,21 +644,16 @@ class DatasetHandler(SharedConfig):
                 .drop_vars(["lonlat", "longitude", "latitude"])
             )
 
-            # Instead of adding 370, create a new coordinate
-            days_in_year = len(self.data["vsc"].dayofyear)
-            new_dayofyear = pd.RangeIndex(days_in_year + 1, 2 * days_in_year + 1)
+            # Concatenate without assigning new_index first
+            msc_vsc = xr.concat([self.data["msc"], self.data["vsc"]], dim="dayofyear")
 
-            self.data["vsc"] = self.data["vsc"].assign_coords(dayofyear=new_dayofyear)
+            # Now assign the new index to the concatenated array
+            total_days = len(msc_vsc.dayofyear)
+            msc_vsc = msc_vsc.assign_coords(dayofyear=("dayofyear", range(total_days)))
 
-            # Concatenate msc and vsc along the dayofyear dimension
-            self.data["msc_vsc"] = xr.concat(
-                [self.data["msc"], self.data["vsc"]], dim="dayofyear"
-            )
-
-            self.data = self.data["msc_vsc"].isel(
+            self.data = msc_vsc.isel(
                 dayofyear=slice(1, 366 + 370, self.config.time_resolution)
             )
-
             printt("Variance is computed")
 
         # Compute or load min and max of the data.
@@ -730,14 +730,14 @@ def main_train_pca(args):
     config = SharedConfig(args)
     dataset_processor = DatasetHandler(
         config=config,
-        n_samples=5,  # args.n_samples,
+        n_samples=args.n_samples,
     )
     data_subset = dataset_processor.preprocess_data()
 
     extremes_processor = RegionalExtremes(
         config=config,
         n_components=args.n_components,
-        n_bins=5,  # args.n_bins,
+        n_bins=args.n_bins,
     )
     projected_data = extremes_processor.compute_pca_and_transform(
         scaled_data=data_subset
@@ -745,7 +745,7 @@ def main_train_pca(args):
 
     dataset_processor = DatasetHandler(
         config=config,
-        n_samples=5,  # None,  # None,  # all the dataset
+        n_samples=None,  # None,  # all the dataset
     )
     data = dataset_processor.preprocess_data()
 
@@ -774,7 +774,7 @@ def main_define_limits(args):
 if __name__ == "__main__":
     args = parser_arguments().parse_args()
     args.compute_variance = True
-    args.name = "data_normalized_per_day"
+    args.name = "data_msc_vsc"
 
     # To train the PCA:
     main_train_pca(args)

@@ -1,12 +1,44 @@
 import datetime
+import os
+
+
+class Logger:
+    def __init__(self, filepath: str = "log.txt"):
+        self.filepath = filepath / "log.txt"
+
+        # Ensure the log file exists
+        if not os.path.exists(self.filepath):
+            open(self.filepath, "w").close()
+
+    def printt(self, message: str):
+        """
+        Small function to track the different steps of the program with the time.
+        Prints to console and appends to a file.
+        """
+        current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        formatted_message = f"[{current_time}] {message}"
+
+        # Print to console
+        print(formatted_message)
+
+        # Append to file
+        with open(self.filepath, "a") as file:
+            file.write(formatted_message + "\n")
+
+
+# Global variable to hold the logger instance
+logger = None
+
+
+def initialize_logger(filepath: str = "log.txt"):
+    global logger
+    logger = Logger(filepath)
 
 
 def printt(message: str):
-    """
-    Small function to track the different step of the program with the time
-    """
-    current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{current_time}] {message}")
+    if logger is None:
+        raise RuntimeError("Logger not initialized. Call initialize_logger() first.")
+    logger.printt(message)
 
 
 def int_or_none(value):
