@@ -54,7 +54,7 @@ class PlotExtremes(SharedConfig):
                 np.quantile(band, q=0.95) - np.quantile(band, q=0.05)
             )
             # We normalize the color by feature importance
-            return normalized_band  # * normalized_variance.sel(component=index).values
+            return normalized_band * normalized_variance.sel(component=index).values
 
         normalized_red = _normalization(0)  # Red is the first component
         normalized_green = _normalization(1)  # Green is the second component
@@ -89,7 +89,7 @@ class PlotExtremes(SharedConfig):
         # Add a title
         plt.title("RGB Components on Earth Map")
 
-        map_saving_path = self.saving_path / "map_components_rgb_rgb.png"
+        map_saving_path = self.saving_path / "map_components_rgb.png"
         plt.savefig(map_saving_path)
         printt("Plot saved")
 
@@ -139,7 +139,7 @@ class PlotExtremes(SharedConfig):
 if __name__ == "__main__":
     args = parser_arguments().parse_args()
 
-    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-07-24_16:25:15_data_normalized_per_day"
+    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-07-25_14:22:55_data_msc_vsc"
     config = SharedConfig(args)
 
     plot = PlotExtremes(config=config)
