@@ -39,7 +39,7 @@ class PlotExtremes(InitializationConfig):
 
     def load_bins(self):
         projection_path = self.config.saving_path / "boxes.zarr"
-        data = 
+        # data =
 
     def plot_map_component(self):
         # Normalize the explained variance

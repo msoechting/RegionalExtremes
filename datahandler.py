@@ -12,7 +12,7 @@ import time
 import sys
 import os
 from global_land_mask import globe
-
+from abc import ABC, abstractmethod
 from config import InitializationConfig, CLIMATIC_INDICES, ECOLOGICAL_INDICES
 
 np.set_printoptions(threshold=sys.maxsize)
@@ -28,7 +28,7 @@ ECOLOGICAL_FILEPATH = (
 VARIABLE_NAME = lambda index: f"{index}gapfilled_QCdyn"
 
 
-class DatasetHandler(InitializationConfig):
+class DatasetHandler(ABC):
     def __init__(
         self,
         config: InitializationConfig,
@@ -39,7 +39,6 @@ class DatasetHandler(InitializationConfig):
 
         Parameters:
         n_samples (Union[int, None]): Number of samples to select.
-        load_data (bool): Flag to determine if data should be loaded during initialization.
         time_resolution (int, optional): temporal resolution of the msc, to reduce computationnal workload. Defaults to 5.
         """
         self.config = config
@@ -54,14 +53,27 @@ class DatasetHandler(InitializationConfig):
         """
         Preprocess data based on the index.
         """
-        self._dataset_specific_preprocessing()
+        self._dataset_specific_loading()
+
+        # Select only a subset of the data if n_samples is specified
+        if self.n_samples:
+            self.randomly_select_data()
+        else:
+            printt(
+                f"Computation on the entire dataset. {self.data.sizes['latitude'] * self.data.sizes['longitude']} samples"
+            )
+            self.standardize_dataset()
+
         self.compute_and_scale_the_msc()
         return self.data
 
-    def _dataset_specific_preprocessing(self, *args, **kwargs):
-        raise NotImplementedError(
-            "This function has to be handle by the dataset specific class."
-        )
+    @abstractmethod
+    def _dataset_specific_loading(self, *args, **kwargs):
+        pass
+
+    @abstractmethod
+    def standardize_dataset(self, *args, **kwargs):
+        pass
 
     def randomly_select_data(self):
         """
@@ -81,13 +93,9 @@ class DatasetHandler(InitializationConfig):
                 selected_locations.append((lon, lat))
         return selected_locations
 
+    @abstractmethod
     def _get_random_coordinates(self):
-        lon_index = random.randint(0, self.data.longitude.sizes["longitude"] - 1)
-        lat_index = random.randint(0, self.data.latitude.sizes["latitude"] - 1)
-        return (
-            self.data.longitude[lon_index].item(),
-            self.data.latitude[lat_index].item(),
-        )
+        pass
 
     def _is_valid_location(self, lon, lat):
         return (
@@ -131,58 +139,6 @@ class DatasetHandler(InitializationConfig):
         )
         return in_europe
 
-    def compute_and_scale_the_msc(self):
-        """
-        compute the MSC of n samples and scale it between 0 and 1.
-        Time_resolution reduce the resolution of the msc to reduce the computation workload during the computation. nb values = 366 / time_resolution.
-        """
-        # Compute the MSC
-        self.data["msc"] = (
-            self.data[self.variable_name]
-            .groupby("time.dayofyear")
-            .mean("time", skipna=True)
-            .drop_vars(["location", "longitude", "latitude"])
-        )
-        if not self.config.compute_variance:
-            # Reduce the temporal resolution
-            self.data = self.data["msc"].isel(
-                dayofyear=slice(1, 366, self.config.time_resolution)
-            )
-        else:
-            # Compute the variance seasonal cycle
-            self.data["vsc"] = (
-                self.data[self.variable_name]
-                .groupby("time.dayofyear")
-                .var("time", skipna=True)
-                .drop_vars(["location", "longitude", "latitude"])
-            )
-
-            # Concatenate without assigning new_index first
-            msc_vsc = xr.concat([self.data["msc"], self.data["vsc"]], dim="dayofyear")
-
-            # Now assign the new index to the concatenated array
-            total_days = len(msc_vsc.dayofyear)
-            msc_vsc = msc_vsc.assign_coords(dayofyear=("dayofyear", range(total_days)))
-
-            self.data = msc_vsc.isel(
-                dayofyear=slice(1, 366 + 370, self.config.time_resolution)
-            )
-            printt("Variance is computed")
-
-        # Compute or load min and max of the data.
-        min_max_data_path = self.config.saving_path / "min_max_data.zarr"
-        if min_max_data_path.exists():
-            self._load_min_max_data(min_max_data_path)
-        else:
-            self._compute_and_save_min_max_data(min_max_data_path)
-
-        # Scale the data between 0 and 1
-        self.data = (self.min_data.broadcast_like(self.data) - self.data) / (
-            self.max_data.broadcast_like(self.data)
-            - self.min_data.broadcast_like(self.data)
-        ) + 1e-8
-        printt(f"Data are scaled between 0 and 1.")
-
     def _compute_and_save_min_max_data(self, min_max_data_path):
         assert (
             self.max_data and self.min_data
@@ -213,9 +169,65 @@ class DatasetHandler(InitializationConfig):
         self.min_data = min_max_data.min_data
         self.max_data = min_max_data.max_data
 
+    def compute_and_scale_the_msc(self):
+        """
+        Compute the Mean Seasonal Cycle (MSC) of n samples and scale it between 0 and 1.
+        Time resolution reduces the resolution of the MSC to decrease computation workload.
+        Number of values = 366 / time_resolution.
+        """
+        self._compute_msc()
+
+        if self.config.compute_variance:
+            self._compute_and_combine_vsc()
+
+        self._reduce_temporal_resolution()
+
+        self._get_min_max_data()
+        self._scale_data()
+        printt("Data are scaled between 0 and 1.")
+
+    def _compute_msc(self):
+        self.data["msc"] = (
+            self.data[self.variable_name]
+            .groupby("time.dayofyear")
+            .mean("time", skipna=True)
+            .drop_vars(["location", "longitude", "latitude"])
+        )
+
+    def _compute_and_combine_vsc(self):
+        self.data["vsc"] = (
+            self.data[self.variable_name]
+            .groupby("time.dayofyear")
+            .var("time", skipna=True)
+            .drop_vars(["location", "longitude", "latitude"])
+        )
+        msc_vsc = xr.concat([self.data["msc"], self.data["vsc"]], dim="dayofyear")
+        total_days = len(msc_vsc.dayofyear)
+        msc_vsc = msc_vsc.assign_coords(dayofyear=("dayofyear", range(total_days)))
+        self.data = msc_vsc
+        printt("Variance is computed")
+
+    def _reduce_temporal_resolution(self):
+        self.data = self.data.isel(
+            dayofyear=slice(1, len(self.data.dayofyear), self.config.time_resolution)
+        )
+
+    def _get_min_max_data(self):
+        min_max_data_path = self.config.saving_path / "min_max_data.zarr"
+        if min_max_data_path.exists():
+            self._load_min_max_data(min_max_data_path)
+        else:
+            self._compute_and_save_min_max_data(min_max_data_path)
+
+    def _scale_data(self):
+        self.data = (self.min_data.broadcast_like(self.data) - self.data) / (
+            self.max_data.broadcast_like(self.data)
+            - self.min_data.broadcast_like(self.data)
+        ) + 1e-8
+
 
 class ClimaticDatasetHandler(DatasetHandler):
-    def _dataset_specific_preprocessing(self):
+    def _dataset_specific_loading(self):
         """
         Preprocess data based on the index.
         """
@@ -225,15 +237,6 @@ class ClimaticDatasetHandler(DatasetHandler):
             raise ValueError(
                 "Index unavailable. Index available:\n -Climatic: 'pei_30', 'pei_90', 'pei_180'."
             )
-
-        # Select only a subset of the data if n_samples is specified
-        if self.n_samples:
-            self.randomly_select_data()
-        else:
-            printt(
-                f"Computation on the entire dataset. {self.data.sizes['latitude'] * self.data.sizes['longitude']} samples"
-            )
-            self.standardize_dataset()
 
     def load_data(self, filepath):
         """
@@ -245,11 +248,20 @@ class ClimaticDatasetHandler(DatasetHandler):
         # name of the variable in the xarray. self.variable_name
         self.variable_name = self.config.index
         self.data = xr.open_zarr(filepath)[[self.variable_name]]
+        print(self.data)
         printt("Data loaded from {}".format(filepath))
 
     def _coordstolongitude(self, x):
         """Transform the longitude coordinates from between 0 and 360 to between -180 and 180."""
         return ((x + 180) % 360) - 180
+
+    def _get_random_coordinates(self):
+        lon_index = random.randint(0, self.data.longitude.sizes["longitude"] - 1)
+        lat_index = random.randint(0, self.data.latitude.sizes["latitude"] - 1)
+        return (
+            self._coordstolongitude(self.data.longitude[lon_index].item()),
+            self.data.latitude[lat_index].item(),
+        )
 
     def standardize_dataset(self):
         """
@@ -308,7 +320,7 @@ class ClimaticDatasetHandler(DatasetHandler):
 
 class EcologicalDatasetHandler(DatasetHandler):
 
-    def _dataset_specific_preprocessing(self):
+    def _dataset_specific_loading(self):
         """
         Preprocess data based on the index.
         """
@@ -316,19 +328,11 @@ class EcologicalDatasetHandler(DatasetHandler):
             filepath = ECOLOGICAL_FILEPATH(self.config.index)
             self.load_data(filepath)
             self.stackdims()
+            self.reduce_resolution()
         else:
             raise NotImplementedError(
                 f"Index {self.config.index} unavailable. Ecological Index available: {ECOLOGICAL_INDICES}."
             )
-
-        # Select only a subset of the data if n_samples is specified
-        if self.n_samples:
-            self.randomly_select_data()
-        else:
-            printt(
-                f"Computation on the entire dataset. {self.data.sizes['latitude'] * self.data.sizes['longitude']} samples"
-            )
-            self.standardize_dataset()
 
     def load_data(self, filepath):
         """
@@ -355,6 +359,18 @@ class EcologicalDatasetHandler(DatasetHandler):
         self.data = self.data.set_index(latitude="latitude", longitude="longitude")
         self.data = self.data.drop(
             ["latchunk", "latstep_modis", "lonchunk", "lonstep_modis"]
+        )
+
+    def reduce_resolution(self):
+        self.data = self.data.coarsen(latitude=5, longitude=5, boundary="trim").mean()
+        printt("Reduce the resolution to match the resolution of climatic data")
+
+    def _get_random_coordinates(self):
+        lon_index = random.randint(0, self.data.longitude.sizes["longitude"] - 1)
+        lat_index = random.randint(0, self.data.latitude.sizes["latitude"] - 1)
+        return (
+            self.data.longitude[lon_index].item(),
+            self.data.latitude[lat_index].item(),
         )
 
     def standardize_dataset(self):

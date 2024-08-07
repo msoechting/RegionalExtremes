@@ -1,5 +1,12 @@
 import datetime
 import os
+import time
+
+
+def int_or_none(value):
+    if value.lower() == "none":
+        return None
+    return int(value)
 
 
 class Logger:
@@ -41,7 +48,12 @@ def printt(message: str):
     logger.printt(message)
 
 
-def int_or_none(value):
-    if value.lower() == "none":
-        return None
-    return int(value)
+def timing_decorator(func):
+    def wrapper(*args, **kwargs):
+        start_time = time.time()
+        result = func(*args, **kwargs)
+        end_time = time.time()
+        printt(f"Function {func.__name__} took {end_time - start_time:.4f} seconds")
+        return result
+
+    return wrapper

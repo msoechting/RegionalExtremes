@@ -109,7 +109,7 @@ def parser_arguments():
     return parser
 
 
-class RegionalExtremes(InitializationConfig):
+class RegionalExtremes:  # (InitializationConfig):
     def __init__(
         self,
         config: InitializationConfig,
@@ -128,6 +128,11 @@ class RegionalExtremes(InitializationConfig):
         self.config = config
         self.n_components = n_components
         self.n_bins = n_bins
+        # self.pca_handler = PCAHandler()
+        # self.limits_bins_handler = LimitsAndBinsHandler()
+
+        #       class PCAHandler(RegionalExtremes):
+        # def __init__(self):
         if self.config.path_load_experiment:
             self._load_pca_matrix()
         else:
@@ -357,10 +362,16 @@ class RegionalExtremes(InitializationConfig):
 
 def main_train_pca(args):
     config = InitializationConfig(args)
-    dataset_processor = EcologicalDatasetHandler(
-        config=config,
-        n_samples=args.n_samples,
-    )
+    if args.index in ECOLOGICAL_INDICES:
+        dataset_processor = EcologicalDatasetHandler(
+            config=config,
+            n_samples=args.n_samples,
+        )
+    elif args.index in CLIMATIC_INDICES:
+        dataset_processor = ClimaticDatasetHandler(
+            config=config,
+            n_samples=args.n_samples,
+        )
     data_subset = dataset_processor.preprocess_data()
     extremes_processor = RegionalExtremes(
         config=config,
@@ -370,10 +381,16 @@ def main_train_pca(args):
     projected_data = extremes_processor.compute_pca_and_transform(
         scaled_data=data_subset
     )
-    dataset_processor = EcologicalDatasetHandler(
-        config=config,
-        n_samples=None,  # None,  # all the dataset
-    )
+    if args.index in ECOLOGICAL_INDICES:
+        dataset_processor = EcologicalDatasetHandler(
+            config=config,
+            n_samples=None,  # All the dataset
+        )
+    elif args.index in CLIMATIC_INDICES:
+        dataset_processor = ClimaticDatasetHandler(
+            config=config,
+            n_samples=None,  # All the dataset
+        )
     data = dataset_processor.preprocess_data()
 
     projected_data = extremes_processor.apply_pca(scaled_data=data)
@@ -400,10 +417,10 @@ def main_define_limits(args):
 
 if __name__ == "__main__":
     args = parser_arguments().parse_args()
-    # args.compute_variance = True
+    args.compute_variance = True
     args.name = "eco"
     args.index = "EVI"
-    args.n_samples = 1000
+    args.n_samples = 5
 
     # To train the PCA:
     main_train_pca(args)
