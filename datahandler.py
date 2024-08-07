@@ -20,6 +20,7 @@ from utils import printt
 
 NORTH_POLE_THRESHOLD = 66.5
 SOUTH_POLE_THRESHOLD = -66.5
+MAX_NAN_PERCENTAGE = 0.3
 CLIMATIC_FILEPATH = "/Net/Groups/BGI/scratch/mweynants/DeepExtremes/v3/PEICube.zarr"
 ECOLOGICAL_FILEPATH = (
     lambda index: f"/Net/Groups/BGI/work_1/scratch/fluxcom/upscaling_inputs/MODIS_VI_perRegion061/{index}/Groups_{index}gapfilled_QCdyn.zarr"
@@ -48,7 +49,6 @@ class DatasetHandler(InitializationConfig):
         self.min_data = None
         self.data = None
 
-    # TODO improve the code
     def preprocess_data(self):
         """
         Preprocess data based on the index.
@@ -64,54 +64,57 @@ class DatasetHandler(InitializationConfig):
 
     def randomly_select_data(self):
         """
-        Randomly select a subset of the data based on n_samples.
+        Randomly select a subset of n_samples of data.
         """
-        # select n_samples instead of n_samples**2 but computationnally expensive!
-        lon_indices = []
-        lat_indices = []
-
-        while len(lon_indices) < self.n_samples:
-            lon_index = random.randint(0, self.data.longitude.sizes["longitude"] - 1)
-            lat_index = random.randint(0, self.data.latitude.sizes["latitude"] - 1)
-
-            # Get lon lat values
-            lon = self.data.longitude[lon_index].item()
-            lat = self.data.latitude[lat_index].item()
-
-            # if location is on a land and not in the polar regions.
-            if (
-                globe.is_land(lat, lon)
-                and np.abs(lat) <= NORTH_POLE_THRESHOLD
-                and self._is_in_europe(lon, lat)
-            ):
-                # compute amount of NaN
-                nb_nan = (
-                    np.isnan(
-                        self.data[self.config.index].isel(
-                            longitude=lon_index, latitude=lat_index
-                        )
-                    )
-                    .sum()
-                    .values
-                )
-                percentage_nan = nb_nan / self.data[self.config.index].size
-                if percentage_nan < 0.3:
-                    lon_indices.append(lon)
-                    lat_indices.append(lat)
-
-        paired_indices = list(zip(lon_indices, lat_indices))
-
-        # Select a cube with all the location (necessary step to reduce the computation of the transpose operation)
-        self.data = self.data.sel(longitude=lon_indices, latitude=lat_indices)
-        # Stack the dimensions
-        self.data = self.data.stack(location=("longitude", "latitude"))
-
-        self.data = self.data.sel(location=paired_indices).transpose(
-            "location", "time", ...
-        )
-
+        selected_locations = self._select_valid_locations()
+        self._update_data_with_selected_locations(selected_locations)
         printt(
             f"Randomly selected {self.data.sizes['location']} samples for training in Europe."
+        )
+        sys.exit()
+
+    def _select_valid_locations(self):
+        selected_locations = []
+        while len(selected_locations) < self.n_samples:
+            lon, lat = self._get_random_coordinates()
+            if self._is_valid_location(lon, lat):
+                selected_locations.append((lon, lat))
+        return selected_locations
+
+    def _get_random_coordinates(self):
+        lon_index = random.randint(0, self.data.longitude.sizes["longitude"] - 1)
+        lat_index = random.randint(0, self.data.latitude.sizes["latitude"] - 1)
+        return (
+            self.data.longitude[lon_index].item(),
+            self.data.latitude[lat_index].item(),
+        )
+
+    def _is_valid_location(self, lon, lat):
+        return (
+            globe.is_land(lat, lon)
+            and abs(lat) <= NORTH_POLE_THRESHOLD
+            and self._is_in_europe(lon, lat)
+            and self._has_acceptable_nan_percentage(lon, lat)
+        )
+
+    def _has_acceptable_nan_percentage(self, lon, lat):
+        data_slice = self.data[self.config.index].sel(longitude=lon, latitude=lat)
+        nan_count = np.isnan(data_slice).sum().values
+        nan_percentage = nan_count / data_slice.size
+        return nan_percentage < MAX_NAN_PERCENTAGE
+
+    def _update_data_with_selected_locations(self, selected_locations):
+
+        lons, lats = zip(*selected_locations)
+        # Ensure that each lons and lats are unique
+        lons, lats = list(set(lons)), list(set(lats))
+
+        # Select data using the MultiIndex
+        self.data = (
+            self.data.sel(longitude=lons, latitude=lats)
+            .stack(location=("longitude", "latitude"))
+            .sel(location=selected_locations)
+            .transpose("location", "time", ...)
         )
 
     def _is_in_europe(self, lon, lat):
@@ -165,8 +168,6 @@ class DatasetHandler(InitializationConfig):
                 dayofyear=slice(1, 366 + 370, self.config.time_resolution)
             )
             printt("Variance is computed")
-
-        sys.exit()
 
         # Compute or load min and max of the data.
         min_max_data_path = self.config.saving_path / "min_max_data.zarr"
@@ -232,7 +233,7 @@ class ClimaticDatasetHandler(DatasetHandler):
             printt(
                 f"Computation on the entire dataset. {self.data.sizes['latitude'] * self.data.sizes['longitude']} samples"
             )
-        self.standardize_dataset()
+            self.standardize_dataset()
 
     def load_data(self, filepath):
         """
@@ -244,40 +245,8 @@ class ClimaticDatasetHandler(DatasetHandler):
         self.data = xr.open_zarr(filepath)[[self.config.index]][self.config.index]
         printt("Data loaded from {}".format(filepath))
 
-    def randomly_select_data(self):
-        """
-        Randomly select a subset of the data based on n_samples.
-        """
-        # select n_samples instead of n_samples**2 but computationnally expensive!
-        lon_indices = []
-        lat_indices = []
-
-        while len(lon_indices) < self.n_samples:
-
-            # Randomly select index location
-            lon_index = random.randint(0, self.data.longitude.sizes["longitude"] - 1)
-            lat_index = random.randint(0, self.data.latitude.sizes["latitude"] - 1)
-
-            # Get location values
-            lon = self._coordstolongitude(self.data.longitude[lon_index].item())
-            lat = self.data.latitude[lat_index].item()
-
-            # Check if location is on a land and not in the polar regions.
-            if (
-                globe.is_land(lat, lon)
-                and np.abs(lat) <= NORTH_POLE_THRESHOLD
-                and self._is_in_europe(lon, lat)
-            ):
-                lon_indices.append(lon_index)
-                lat_indices.append(lat_index)
-
-        self.data = self.data.isel(longitude=lon_indices, latitude=lat_indices)
-        printt(
-            f"Randomly selected {self.data.sizes['latitude'] * self.data.sizes['longitude']} samples for training in Europe."
-        )
-
-    # Transform the longitude coordinates to -180 and 180
     def _coordstolongitude(self, x):
+        """Transform the longitude coordinates from between 0 and 360 to between -180 and 180."""
         return ((x + 180) % 360) - 180
 
     def standardize_dataset(self):

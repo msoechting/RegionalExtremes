@@ -57,9 +57,16 @@ def parser_arguments():
         "--compute_variance",
         type=bool,
         default=False,
-        help="compute variance",
+        help="Compute variance of the seasonal cycle in addition of the mean seasonal cycle (default: False).",
     )
 
+    parser.add_argument(
+        "--region",
+        type=str,
+        default="globe",
+        help="Region of the globe to apply the regional extremes."
+        "Region available: 'globe', 'europe'.",
+    )
     parser.add_argument(
         "--time_resolution",
         type=int,
@@ -74,8 +81,8 @@ def parser_arguments():
     parser.add_argument(
         "--n_samples",
         type=int_or_none,
-        default=5,
-        help="Select randomly n_samples**2. Use 'None' for no limit.",
+        default=100,
+        help="Select randomly n_samples. Use 'None' for no limit.",
     )
 
     parser.add_argument(
@@ -385,7 +392,7 @@ if __name__ == "__main__":
     # args.compute_variance = True
     args.name = "eco"
     args.index = "EVI"
-    args.n_samples = 5
+    args.n_samples = 100
 
     config = InitializationConfig(args)
     dataset_processor = EcologicalDatasetHandler(
