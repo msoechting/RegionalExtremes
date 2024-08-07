@@ -74,7 +74,7 @@ def parser_arguments():
     parser.add_argument(
         "--n_samples",
         type=int_or_none,
-        default=100,
+        default=5,
         help="Select randomly n_samples**2. Use 'None' for no limit.",
     )
 
@@ -216,17 +216,17 @@ class RegionalExtremes(InitializationConfig):
         # Create the new DataArray
         pca_projection = xr.DataArray(
             data=pca_projection.values,
-            dims=["lonlat", "component"],
+            dims=["location", "component"],
             coords={
-                "lonlat": pca_projection.lonlat,
+                "location": pca_projection.location,
                 "component": component,
             },
             name="pca",
         )
-        # Unstack lonlat for longitude and latitude as dimensions
+        # Unstack location for longitude and latitude as dimensions
         pca_projection = pca_projection.set_index(
-            lonlat=["longitude", "latitude"]
-        ).unstack("lonlat")
+            location=["longitude", "latitude"]
+        ).unstack("location")
 
         # Explained variance for each component
         explained_variance = xr.DataArray(

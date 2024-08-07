@@ -1,4 +1,5 @@
 import xarray as xr
+import zarr
 import dask.array as da
 import numpy as np
 import json
@@ -47,6 +48,7 @@ class DatasetHandler(InitializationConfig):
         self.min_data = None
         self.data = None
 
+    # TODO improve the code
     def preprocess_data(self):
         """
         Preprocess data based on the index.
@@ -76,24 +78,40 @@ class DatasetHandler(InitializationConfig):
             lon = self.data.longitude[lon_index].item()
             lat = self.data.latitude[lat_index].item()
 
-            # compute amount of NaN
-            nb_nan = np.isnan(
-                self.data.isel(longitude=lon_index, latitude=lat_index)
-            ).sum()
-
-            percentage_nan = nb_nan / self.data[self.config.index].size
             # if location is on a land and not in the polar regions.
             if (
                 globe.is_land(lat, lon)
                 and np.abs(lat) <= NORTH_POLE_THRESHOLD
-                and percentage_nan < 0.3
                 and self._is_in_europe(lon, lat)
             ):
-                lon_indices.append(lon_index)
-                lat_indices.append(lat_index)
-        self.data = self.data.isel(longitude=lon_indices, latitude=lat_indices)
+                # compute amount of NaN
+                nb_nan = (
+                    np.isnan(
+                        self.data[self.config.index].isel(
+                            longitude=lon_index, latitude=lat_index
+                        )
+                    )
+                    .sum()
+                    .values
+                )
+                percentage_nan = nb_nan / self.data[self.config.index].size
+                if percentage_nan < 0.3:
+                    lon_indices.append(lon)
+                    lat_indices.append(lat)
+
+        paired_indices = list(zip(lon_indices, lat_indices))
+
+        # Select a cube with all the location (necessary step to reduce the computation of the transpose operation)
+        self.data = self.data.sel(longitude=lon_indices, latitude=lat_indices)
+        # Stack the dimensions
+        self.data = self.data.stack(location=("longitude", "latitude"))
+
+        self.data = self.data.sel(location=paired_indices).transpose(
+            "location", "time", ...
+        )
+
         printt(
-            f"Randomly selected {self.data.sizes['latitude'] * self.data.sizes['longitude']} samples for training in Europe."
+            f"Randomly selected {self.data.sizes['location']} samples for training in Europe."
         )
 
     def _is_in_europe(self, lon, lat):
@@ -119,8 +137,8 @@ class DatasetHandler(InitializationConfig):
         self.data["msc"] = (
             self.data[self.config.index]
             .groupby("time.dayofyear")
-            .mean("time")
-            .drop_vars(["lonlat", "longitude", "latitude"])
+            .mean("time", skipna=True)
+            .drop_vars(["location", "longitude", "latitude"])
         )
         if not self.config.compute_variance:
             # Reduce the temporal resolution
@@ -132,8 +150,8 @@ class DatasetHandler(InitializationConfig):
             self.data["vsc"] = (
                 self.data[self.config.index]
                 .groupby("time.dayofyear")
-                .var("time")
-                .drop_vars(["lonlat", "longitude", "latitude"])
+                .var("time", skipna=True)
+                .drop_vars(["location", "longitude", "latitude"])
             )
 
             # Concatenate without assigning new_index first
@@ -148,6 +166,8 @@ class DatasetHandler(InitializationConfig):
             )
             printt("Variance is computed")
 
+        sys.exit()
+
         # Compute or load min and max of the data.
         min_max_data_path = self.config.saving_path / "min_max_data.zarr"
         if min_max_data_path.exists():
@@ -156,12 +176,10 @@ class DatasetHandler(InitializationConfig):
             self._compute_and_save_min_max_data(min_max_data_path)
 
         # Scale the data between 0 and 1
-
         self.data = (self.min_data.broadcast_like(self.data) - self.data) / (
             self.max_data.broadcast_like(self.data)
             - self.min_data.broadcast_like(self.data)
         ) + 1e-8
-
         printt(f"Data are scaled between 0 and 1.")
 
     def _compute_and_save_min_max_data(self, min_max_data_path):
@@ -169,8 +187,8 @@ class DatasetHandler(InitializationConfig):
             self.max_data and self.min_data
         ) is None, "the min and max of the data are already defined."
         assert self.config.path_load_experiment is None, "A model is already loaded."
-        self.max_data = self.data.max(dim=["lonlat"])
-        self.min_data = self.data.min(dim=["lonlat"])
+        self.max_data = self.data.max(dim=["location"])
+        self.min_data = self.data.min(dim=["location"])
 
         # Save min_data and max_data
         if not min_max_data_path.exists():
@@ -312,8 +330,8 @@ class ClimaticDatasetHandler(DatasetHandler):
         printt("Data filtred to Europe.")
 
         # Stack the dimensions
-        self.data = self.data.stack(lonlat=("longitude", "latitude")).transpose(
-            "lonlat", "time", ...
+        self.data = self.data.stack(location=("longitude", "latitude")).transpose(
+            "location", "time", ...
         )
 
         printt(f"Climatic data loaded with dimensions: {self.data.sizes}")
@@ -321,7 +339,7 @@ class ClimaticDatasetHandler(DatasetHandler):
 
 class EcologicalDatasetHandler(DatasetHandler):
 
-    def preprocess_data(self):
+    def _dataset_specific_preprocessing(self):
         """
         Preprocess data based on the index.
         """
@@ -335,7 +353,7 @@ class EcologicalDatasetHandler(DatasetHandler):
             self.stackdims()
         else:
             raise NotImplementedError(
-                "Index unavailable. Index available:\n -Climatic: 'pei_30', 'pei_90', 'pei_180'. \n Ecological: 'EVI', 'NDVI', 'kNDVI'."
+                f"Index {self.config.index} unavailable. Ecological Index available:: 'EVI', 'NDVI', 'kNDVI'."
             )
 
         # Select only a subset of the data if n_samples is specified
@@ -345,10 +363,7 @@ class EcologicalDatasetHandler(DatasetHandler):
             printt(
                 f"Computation on the entire dataset. {self.data.sizes['latitude'] * self.data.sizes['longitude']} samples"
             )
-
-        self.standardize_dataset()
-        self.compute_and_scale_the_msc()
-        return self.data
+            self.standardize_dataset(paired_indices)
 
     def load_data(self, filepath):
         """
@@ -358,8 +373,7 @@ class EcologicalDatasetHandler(DatasetHandler):
         filepath (str): Path to the data file.
         """
         self.config.index = VARIABLE_NAME(self.config.index)
-        self.data = xr.open_zarr(filepath)[[self.config.index]]
-        # self.data = self.data.EVIgapfilled_QCdyn
+        self.data = xr.open_zarr(filepath, consolidated=False)[[self.config.index]]
         printt("Data loaded from {}".format(filepath))
 
     def stackdims(self):
@@ -378,15 +392,15 @@ class EcologicalDatasetHandler(DatasetHandler):
             ["latchunk", "latstep_modis", "lonchunk", "lonstep_modis"]
         )
 
-    def standardize_dataset(self):
+    def standardize_dataset(self, paired_indices):
         """
         Apply climatic transformations using xarray.apply_ufunc.
         """
-        # assert self.config.index in [
-        #    "EVI",
-        #    "NDVI",
-        #    "kNDVI",
-        # ], "Index unavailable. Index available: 'pei_30', 'pei_90', 'pei_180'."
+        assert self.config.index in [
+            "EVI",
+            "NDVI",
+            "kNDVI",
+        ], f"Index {self.config.index} unavailable. Index available: 'EVI', 'pei_90', 'pei_180'."
 
         assert self.data is not None, "Data not loaded."
 
@@ -408,14 +422,15 @@ class EcologicalDatasetHandler(DatasetHandler):
         )
 
         # Filter dataset to select Europe
+        # TODO extend to every region
         # Select European data
         in_europe = self._is_in_europe(self.data.longitude, self.data.latitude)
         self.data = self.data.where(in_europe, drop=True)
         printt("Data filtred to Europe.")
 
         # Stack the dimensions
-        self.data = self.data.stack(lonlat=("longitude", "latitude")).transpose(
-            "lonlat", "time", ...
+        self.data = self.data.stack(location=("longitude", "latitude")).transpose(
+            "location", "time", ...
         )
 
         printt(f"Ecological data loaded with dimensions: {self.data.sizes}")

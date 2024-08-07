@@ -4,15 +4,15 @@ import matplotlib.pyplot as plt
 import cartopy
 
 
-from regional_extremes import SharedConfig
+from config import InitializationConfig
 from regional_extremes import parser_arguments
 from utils import printt
 
 
-class PlotExtremes(SharedConfig):
+class PlotExtremes(InitializationConfig):
     def __init__(
         self,
-        config: SharedConfig,
+        config: InitializationConfig,
     ):
         """
         Initialize PlotExtremes.
@@ -34,18 +34,18 @@ class PlotExtremes(SharedConfig):
         projection_path = self.config.saving_path / "pca_projection.zarr"
         data = xr.open_zarr(projection_path)
         self.pca_projection = data.pca
-        self.explained_variance = data.explained_variance
+        # self.explained_variance = data.explained_variance
         printt("Projection loaded from {}".format(projection_path))
 
     def plot_map_component(self):
         # Normalize the explained variance
-        normalized_variance = (
-            self.explained_variance.explained_variance
-            / self.explained_variance.explained_variance.sum()
-        )
+        # normalized_variance = (
+        #     self.explained_variance.explained_variance
+        #     / self.explained_variance.explained_variance.sum()
+        # )
 
         # Normalize the data to the range [0, 1]
-        def _normalization(index):
+        def _normalization(index, normalization=False):
             band = self.pca_projection.isel(component=index).values
 
             # (band - np.min(band)) / (np.max(band) - np.min(band))
@@ -54,7 +54,12 @@ class PlotExtremes(SharedConfig):
                 np.quantile(band, q=0.95) - np.quantile(band, q=0.05)
             )
             # We normalize the color by feature importance
-            return normalized_band * normalized_variance.sel(component=index).values
+            if normalization:
+                normalized_band = (
+                    normalized_band * normalized_variance.sel(component=index).values
+                )
+
+            return normalized_band
 
         normalized_red = _normalization(0)  # Red is the first component
         normalized_green = _normalization(1)  # Green is the second component
@@ -62,12 +67,17 @@ class PlotExtremes(SharedConfig):
 
         # Stack the components into a 3D array
         rgb_normalized = np.dstack((normalized_red, normalized_green, normalized_blue))
+        # Transpose the array
+        rgb_normalized = np.transpose(rgb_normalized, (1, 0, 2))
 
         # Set up the map projection
         projection = cartopy.crs.PlateCarree()
 
         # Create the figure and axis
-        fig, ax = plt.subplots(figsize=(12, 8), subplot_kw={"projection": projection})
+        fig, ax = plt.subplots(figsize=(12, 5), subplot_kw={"projection": projection})
+
+        # adjust the plot
+        plt.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05)
 
         # Add coastlines and set global extent
         ax.coastlines()
@@ -82,6 +92,7 @@ class PlotExtremes(SharedConfig):
         )
 
         ax.set_extent(img_extent, crs=projection)
+
         ax.imshow(
             rgb_normalized, origin="lower", extent=img_extent, transform=projection
         )
@@ -139,8 +150,8 @@ class PlotExtremes(SharedConfig):
 if __name__ == "__main__":
     args = parser_arguments().parse_args()
 
-    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-07-25_14:22:55_data_msc_vsc"
-    config = SharedConfig(args)
+    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2014047_2024-07-18_16:02:30_Global"
+    config = InitializationConfig(args)
 
     plot = PlotExtremes(config=config)
     plot.load_pca_projection()
