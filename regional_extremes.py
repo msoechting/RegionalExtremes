@@ -17,7 +17,7 @@ import os
 
 from utils import initialize_logger, printt, int_or_none
 from datahandler import ClimaticDatasetHandler, EcologicalDatasetHandler
-from config import InitializationConfig
+from config import InitializationConfig, CLIMATIC_INDICES, ECOLOGICAL_INDICES
 
 np.set_printoptions(threshold=sys.maxsize)
 
@@ -344,12 +344,11 @@ class RegionalExtremes(InitializationConfig):
 
 def main_train_pca(args):
     config = InitializationConfig(args)
-    dataset_processor = DatasetHandler(
+    dataset_processor = EcologicalDatasetHandler(
         config=config,
         n_samples=args.n_samples,
     )
     data_subset = dataset_processor.preprocess_data()
-
     extremes_processor = RegionalExtremes(
         config=config,
         n_components=args.n_components,
@@ -358,8 +357,7 @@ def main_train_pca(args):
     projected_data = extremes_processor.compute_pca_and_transform(
         scaled_data=data_subset
     )
-
-    dataset_processor = DatasetHandler(
+    dataset_processor = EcologicalDatasetHandler(
         config=config,
         n_samples=None,  # None,  # all the dataset
     )
@@ -392,26 +390,10 @@ if __name__ == "__main__":
     # args.compute_variance = True
     args.name = "eco"
     args.index = "EVI"
-    args.n_samples = 100
-
-    config = InitializationConfig(args)
-    dataset_processor = EcologicalDatasetHandler(
-        config=config,
-        n_samples=args.n_samples,
-    )
-    data_subset = dataset_processor.preprocess_data()
-
-    extremes_processor = RegionalExtremes(
-        config=config,
-        n_components=args.n_components,
-        n_bins=args.n_bins,
-    )
-    projected_data = extremes_processor.compute_pca_and_transform(
-        scaled_data=data_subset
-    )
+    args.n_samples = 10000
 
     # To train the PCA:
-    # main_train_pca(args)
+    main_train_pca(args)
 
     # To define the limits:
     # main_define_limits(args)

@@ -13,7 +13,7 @@ import sys
 import os
 from global_land_mask import globe
 
-from config import InitializationConfig
+from config import InitializationConfig, CLIMATIC_INDICES, ECOLOGICAL_INDICES
 
 np.set_printoptions(threshold=sys.maxsize)
 from utils import printt
@@ -48,6 +48,7 @@ class DatasetHandler(InitializationConfig):
         self.max_data = None
         self.min_data = None
         self.data = None
+        self.variable = None
 
     def preprocess_data(self):
         """
@@ -71,7 +72,6 @@ class DatasetHandler(InitializationConfig):
         printt(
             f"Randomly selected {self.data.sizes['location']} samples for training in Europe."
         )
-        sys.exit()
 
     def _select_valid_locations(self):
         selected_locations = []
@@ -98,7 +98,7 @@ class DatasetHandler(InitializationConfig):
         )
 
     def _has_acceptable_nan_percentage(self, lon, lat):
-        data_slice = self.data[self.config.index].sel(longitude=lon, latitude=lat)
+        data_slice = self.data[self.variable_name].sel(longitude=lon, latitude=lat)
         nan_count = np.isnan(data_slice).sum().values
         nan_percentage = nan_count / data_slice.size
         return nan_percentage < MAX_NAN_PERCENTAGE
@@ -138,7 +138,7 @@ class DatasetHandler(InitializationConfig):
         """
         # Compute the MSC
         self.data["msc"] = (
-            self.data[self.config.index]
+            self.data[self.variable_name]
             .groupby("time.dayofyear")
             .mean("time", skipna=True)
             .drop_vars(["location", "longitude", "latitude"])
@@ -151,7 +151,7 @@ class DatasetHandler(InitializationConfig):
         else:
             # Compute the variance seasonal cycle
             self.data["vsc"] = (
-                self.data[self.config.index]
+                self.data[self.variable_name]
                 .groupby("time.dayofyear")
                 .var("time", skipna=True)
                 .drop_vars(["location", "longitude", "latitude"])
@@ -242,7 +242,9 @@ class ClimaticDatasetHandler(DatasetHandler):
         Parameters:
         filepath (str): Path to the data file.
         """
-        self.data = xr.open_zarr(filepath)[[self.config.index]][self.config.index]
+        # name of the variable in the xarray. self.variable_name
+        self.variable_name = self.config.index
+        self.data = xr.open_zarr(filepath)[[self.variable_name]]
         printt("Data loaded from {}".format(filepath))
 
     def _coordstolongitude(self, x):
@@ -253,11 +255,9 @@ class ClimaticDatasetHandler(DatasetHandler):
         """
         Apply climatic transformations using xarray.apply_ufunc.
         """
-        assert self.config.index in [
-            "pei_30",
-            "pei_90",
-            "pei_180",
-        ], "Index unavailable. Index available: 'pei_30', 'pei_90', 'pei_180'."
+        assert (
+            self.config.index in CLIMATIC_INDICES
+        ), f"Index unavailable. Index available: {CLIMATIC_INDICES}."
 
         assert self.data is not None, "Data not loaded."
 
@@ -312,17 +312,16 @@ class EcologicalDatasetHandler(DatasetHandler):
         """
         Preprocess data based on the index.
         """
-        if self.config.index in [
-            "EVI",
-            "NDVI",
-            "kNDVI",
-        ]:
+        filepath = ECOLOGICAL_FILEPATH(self.config.index)
+        self.load_data(filepath)
+        self.stackdims()
+        if self.config.index in ECOLOGICAL_INDICES:
             filepath = ECOLOGICAL_FILEPATH(self.config.index)
             self.load_data(filepath)
             self.stackdims()
         else:
             raise NotImplementedError(
-                f"Index {self.config.index} unavailable. Ecological Index available:: 'EVI', 'NDVI', 'kNDVI'."
+                f"Index {self.config.index} unavailable. Ecological Index available: {ECOLOGICAL_INDICES}."
             )
 
         # Select only a subset of the data if n_samples is specified
@@ -332,7 +331,7 @@ class EcologicalDatasetHandler(DatasetHandler):
             printt(
                 f"Computation on the entire dataset. {self.data.sizes['latitude'] * self.data.sizes['longitude']} samples"
             )
-            self.standardize_dataset(paired_indices)
+            self.standardize_dataset()
 
     def load_data(self, filepath):
         """
@@ -341,8 +340,8 @@ class EcologicalDatasetHandler(DatasetHandler):
         Parameters:
         filepath (str): Path to the data file.
         """
-        self.config.index = VARIABLE_NAME(self.config.index)
-        self.data = xr.open_zarr(filepath, consolidated=False)[[self.config.index]]
+        self.variable_name = VARIABLE_NAME(self.config.index)
+        self.data = xr.open_zarr(filepath, consolidated=False)[[self.variable_name]]
         printt("Data loaded from {}".format(filepath))
 
     def stackdims(self):
@@ -361,15 +360,13 @@ class EcologicalDatasetHandler(DatasetHandler):
             ["latchunk", "latstep_modis", "lonchunk", "lonstep_modis"]
         )
 
-    def standardize_dataset(self, paired_indices):
+    def standardize_dataset(self):
         """
-        Apply climatic transformations using xarray.apply_ufunc.
+        Standarize the ecological xarray. Remove irrelevant area, and reshape for the PCA.
         """
-        assert self.config.index in [
-            "EVI",
-            "NDVI",
-            "kNDVI",
-        ], f"Index {self.config.index} unavailable. Index available: 'EVI', 'pei_90', 'pei_180'."
+        assert (
+            self.config.index in ECOLOGICAL_INDICES
+        ), f"Index {self.config.index} unavailable. Index available: {ECOLOGICAL_INDICES}."
 
         assert self.data is not None, "Data not loaded."
 
@@ -390,7 +387,6 @@ class EcologicalDatasetHandler(DatasetHandler):
             np.abs(self.data.latitude) >= SOUTH_POLE_THRESHOLD, drop=True
         )
 
-        # Filter dataset to select Europe
         # TODO extend to every region
         # Select European data
         in_europe = self._is_in_europe(self.data.longitude, self.data.latitude)

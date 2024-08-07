@@ -34,15 +34,15 @@ class PlotExtremes(InitializationConfig):
         projection_path = self.config.saving_path / "pca_projection.zarr"
         data = xr.open_zarr(projection_path)
         self.pca_projection = data.pca
-        # self.explained_variance = data.explained_variance
+        self.explained_variance = data.explained_variance
         printt("Projection loaded from {}".format(projection_path))
 
     def plot_map_component(self):
         # Normalize the explained variance
-        # normalized_variance = (
-        #     self.explained_variance.explained_variance
-        #     / self.explained_variance.explained_variance.sum()
-        # )
+        normalized_variance = (
+            self.explained_variance.explained_variance
+            / self.explained_variance.explained_variance.sum()
+        )
 
         # Normalize the data to the range [0, 1]
         def _normalization(index, normalization=False):
@@ -150,7 +150,7 @@ class PlotExtremes(InitializationConfig):
 if __name__ == "__main__":
     args = parser_arguments().parse_args()
 
-    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2014047_2024-07-18_16:02:30_Global"
+    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-08-07_13:48:38_eco"
     config = InitializationConfig(args)
 
     plot = PlotExtremes(config=config)
