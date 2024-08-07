@@ -37,6 +37,10 @@ class PlotExtremes(InitializationConfig):
         self.explained_variance = data.explained_variance
         printt("Projection loaded from {}".format(projection_path))
 
+    def load_bins(self):
+        projection_path = self.config.saving_path / "boxes.zarr"
+        data = 
+
     def plot_map_component(self):
         # Normalize the explained variance
         normalized_variance = (
@@ -106,6 +110,19 @@ class PlotExtremes(InitializationConfig):
 
         # Show the plot
         plt.show()
+
+    def plot_region(self):
+        """plot the samples of a single region"""
+
+        def _get_random_coordinates(self):
+            lon_index = random.randint(0, self.data.longitude.sizes["longitude"] - 1)
+            lat_index = random.randint(0, self.data.latitude.sizes["latitude"] - 1)
+            return (
+                self.data.longitude[lon_index].item(),
+                self.data.latitude[lat_index].item(),
+            )
+
+        lon, lat = self._get_random_coordinates()
 
     def plot_boxes_msc(box_indices, n_bins):
         # find_boxes(pca_components, pca_bins)

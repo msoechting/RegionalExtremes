@@ -255,6 +255,19 @@ class RegionalExtremes(InitializationConfig):
         pca_projection.to_zarr(pca_projection_path)
         printt("Projection saved.")
 
+    def load_pca_projection(self):
+        """
+        Load data from the specified filepath.
+
+        Parameters:
+        filepath (str): Path to the data file.
+        """
+        projection_path = self.config.saving_path / "pca_projection.zarr"
+        data = xr.open_zarr(projection_path)
+        self.pca_projection = data.pca
+        self.explained_variance = data.explained_variance
+        printt("Projection loaded from {}".format(projection_path))
+
     def define_limits_bins(self, projected_data: np.ndarray) -> list[np.ndarray]:
         """
         Define the bounds of each bin on the projected data for each component.
@@ -331,7 +344,7 @@ class RegionalExtremes(InitializationConfig):
 
     def _save_bins(self, box_indices):
         """Saves the bins to a file."""
-        boxes_path = self.config.saving_path / "boxes.ny"
+        boxes_path = self.config.saving_path / "boxes.zarr"
         if os.path.exists(limits_bins_path):
             raise FileExistsError(
                 f"The file {limits_bins_path} already exists. Rewriting is not allowed."
@@ -368,7 +381,7 @@ def main_train_pca(args):
 
 
 def main_define_limits(args):
-    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-07-24_11:17:05_Europe2"
+    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-08-07_16:06:37_eco_small"
     config = InitializationConfig(args)
 
     dataset_processor = EcologicalDatasetHandler(
@@ -390,7 +403,7 @@ if __name__ == "__main__":
     # args.compute_variance = True
     args.name = "eco"
     args.index = "EVI"
-    args.n_samples = 10000
+    args.n_samples = 1000
 
     # To train the PCA:
     main_train_pca(args)

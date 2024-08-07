@@ -312,9 +312,6 @@ class EcologicalDatasetHandler(DatasetHandler):
         """
         Preprocess data based on the index.
         """
-        filepath = ECOLOGICAL_FILEPATH(self.config.index)
-        self.load_data(filepath)
-        self.stackdims()
         if self.config.index in ECOLOGICAL_INDICES:
             filepath = ECOLOGICAL_FILEPATH(self.config.index)
             self.load_data(filepath)
