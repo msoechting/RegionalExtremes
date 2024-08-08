@@ -1,5 +1,6 @@
 import xarray as xr
 import zarr
+import dask
 import dask.array as da
 import numpy as np
 import json
@@ -8,6 +9,7 @@ import datetime
 import pandas as pd
 from pathlib import Path
 from typing import Union
+from dask.array.core import map_blocks
 import time
 import sys
 import os
@@ -139,14 +141,86 @@ class DatasetHandler(ABC):
         )
         return in_europe
 
+    def compute_and_scale_the_msc(self):
+        """
+        Compute the Mean Seasonal Cycle (MSC) of n samples and scale it between 0 and 1.
+        Time resolution reduces the resolution of the MSC to decrease computation workload.
+        Number of values = 366 / time_resolution.
+        """
+        self._compute_msc()
+
+        if self.config.compute_variance:
+            self._compute_and_combine_vsc()
+
+        self._reduce_temporal_resolution()
+        self.data = self.data.drop_vars(["location", "longitude", "latitude"])
+
+        # Rechunck the data per time serie
+        self.data = self.data.chunk(
+            {"dayofyear": len(self.data.dayofyear), "location": 1}
+        )
+        # Use map_blocks to compute the condition in parallel
+        # condition = self.data.map_blocks(
+        #     lambda x: ~x.isnull().any(dim="dayofyear"),
+        # )
+        condition = self.data.isnull().any(dim="dayofyear").compute()
+        # Assuming 'self.data' is your Xarray DataArray
+        # condition = da.map_blocks(
+        #     lambda x: ~x.isnull().any(dim="dayofyear"), self.data, dtype=bool
+        # ).compute()
+
+        self.data = self.data.where(condition, drop=True)
+        printt("NaN removed.")
+
+        self._get_min_max_data()
+        self._scale_data()
+        self.data = self.data.chunk(
+            {"dayofyear": len(self.data.dayofyear), "location": 1}
+        )
+        printt("Data are scaled between 0 and 1.")
+
+    def _compute_msc(self):
+        self.data["msc"] = (
+            self.data[self.variable_name]
+            .groupby("time.dayofyear")
+            .mean("time", skipna=True)
+        )
+
+    def _compute_and_combine_vsc(self):
+        self.data["vsc"] = (
+            self.data[self.variable_name]
+            .groupby("time.dayofyear")
+            .var("time", skipna=True)
+            .drop_vars(["location", "longitude", "latitude"])
+            .dropna(dim="time", how="any")
+        )
+        msc_vsc = xr.concat([self.data["msc"], self.data["vsc"]], dim="dayofyear")
+        total_days = len(msc_vsc.dayofyear)
+        msc_vsc = msc_vsc.assign_coords(dayofyear=("dayofyear", range(total_days)))
+        self.data = msc_vsc
+        printt("Variance is computed")
+
+    def _reduce_temporal_resolution(self):
+        self.data = self.data["msc"].isel(
+            dayofyear=slice(1, len(self.data.dayofyear), self.config.time_resolution)
+        )
+
+    def _get_min_max_data(self):
+        min_max_data_path = self.config.saving_path / "min_max_data.zarr"
+        if min_max_data_path.exists():
+            self._load_min_max_data(min_max_data_path)
+        else:
+            self._compute_and_save_min_max_data(min_max_data_path)
+
     def _compute_and_save_min_max_data(self, min_max_data_path):
         assert (
             self.max_data and self.min_data
         ) is None, "the min and max of the data are already defined."
         assert self.config.path_load_experiment is None, "A model is already loaded."
+
+        self.data = self.data.chunk({"dayofyear": 1, "location": 4000})
         self.max_data = self.data.max(dim=["location"])
         self.min_data = self.data.min(dim=["location"])
-
         # Save min_data and max_data
         if not min_max_data_path.exists():
             min_max_data = xr.Dataset(
@@ -168,56 +242,6 @@ class DatasetHandler(ABC):
         min_max_data = xr.open_zarr(min_max_data_path)
         self.min_data = min_max_data.min_data
         self.max_data = min_max_data.max_data
-
-    def compute_and_scale_the_msc(self):
-        """
-        Compute the Mean Seasonal Cycle (MSC) of n samples and scale it between 0 and 1.
-        Time resolution reduces the resolution of the MSC to decrease computation workload.
-        Number of values = 366 / time_resolution.
-        """
-        self._compute_msc()
-
-        if self.config.compute_variance:
-            self._compute_and_combine_vsc()
-
-        self._reduce_temporal_resolution()
-
-        self._get_min_max_data()
-        self._scale_data()
-        printt("Data are scaled between 0 and 1.")
-
-    def _compute_msc(self):
-        self.data["msc"] = (
-            self.data[self.variable_name]
-            .groupby("time.dayofyear")
-            .mean("time", skipna=True)
-            .drop_vars(["location", "longitude", "latitude"])
-        )
-
-    def _compute_and_combine_vsc(self):
-        self.data["vsc"] = (
-            self.data[self.variable_name]
-            .groupby("time.dayofyear")
-            .var("time", skipna=True)
-            .drop_vars(["location", "longitude", "latitude"])
-        )
-        msc_vsc = xr.concat([self.data["msc"], self.data["vsc"]], dim="dayofyear")
-        total_days = len(msc_vsc.dayofyear)
-        msc_vsc = msc_vsc.assign_coords(dayofyear=("dayofyear", range(total_days)))
-        self.data = msc_vsc
-        printt("Variance is computed")
-
-    def _reduce_temporal_resolution(self):
-        self.data = self.data.isel(
-            dayofyear=slice(1, len(self.data.dayofyear), self.config.time_resolution)
-        )
-
-    def _get_min_max_data(self):
-        min_max_data_path = self.config.saving_path / "min_max_data.zarr"
-        if min_max_data_path.exists():
-            self._load_min_max_data(min_max_data_path)
-        else:
-            self._compute_and_save_min_max_data(min_max_data_path)
 
     def _scale_data(self):
         self.data = (self.min_data.broadcast_like(self.data) - self.data) / (
@@ -248,7 +272,6 @@ class ClimaticDatasetHandler(DatasetHandler):
         # name of the variable in the xarray. self.variable_name
         self.variable_name = self.config.index
         self.data = xr.open_zarr(filepath)[[self.variable_name]]
-        print(self.data)
         printt("Data loaded from {}".format(filepath))
 
     def _coordstolongitude(self, x):
@@ -284,7 +307,7 @@ class ClimaticDatasetHandler(DatasetHandler):
 
         # Remove the years before 1970 due to quality
         self.data = self.data.sel(
-            time=slice(datetime.date(1970, 1, 1), datetime.date(2030, 12, 31))
+            time=slice(datetime.date(1970, 1, 1), datetime.date(2022, 12, 31))
         )
 
         # Filter data from the polar regions
@@ -362,8 +385,11 @@ class EcologicalDatasetHandler(DatasetHandler):
         )
 
     def reduce_resolution(self):
+        res_lat, res_lon = len(self.data.latitude), len(self.data.longitude)
         self.data = self.data.coarsen(latitude=5, longitude=5, boundary="trim").mean()
-        printt("Reduce the resolution to match the resolution of climatic data")
+        printt(
+            f"Reduce the resolution from ({res_lat}, {res_lon}) to ({len(self.data.latitude)}, {len(self.data.longitude)})."
+        )
 
     def _get_random_coordinates(self):
         lon_index = random.randint(0, self.data.longitude.sizes["longitude"] - 1)
@@ -388,9 +414,10 @@ class EcologicalDatasetHandler(DatasetHandler):
             dim in self.data.sizes for dim in ("time", "latitude", "longitude")
         ), "Dimension missing"
 
-        # Removing NaN values
-        condition = self.data.notnull().any(dim="time").compute()
-        self.data = self.data.where(condition, drop=True)
+        # Filter data to the drought indices range.
+        self.data = self.data.sel(
+            time=slice(datetime.date(2000, 1, 1), datetime.date(2022, 12, 31))
+        )
 
         # Filter data from the polar regions
         self.data = self.data.where(
@@ -400,11 +427,12 @@ class EcologicalDatasetHandler(DatasetHandler):
             np.abs(self.data.latitude) >= SOUTH_POLE_THRESHOLD, drop=True
         )
 
-        # TODO extend to every region
         # Select European data
         in_europe = self._is_in_europe(self.data.longitude, self.data.latitude)
         self.data = self.data.where(in_europe, drop=True)
         printt("Data filtred to Europe.")
+
+        # TODO extend to every region
 
         # Stack the dimensions
         self.data = self.data.stack(location=("longitude", "latitude")).transpose(

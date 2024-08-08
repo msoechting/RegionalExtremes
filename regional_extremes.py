@@ -384,7 +384,7 @@ def main_train_pca(args):
     if args.index in ECOLOGICAL_INDICES:
         dataset_processor = EcologicalDatasetHandler(
             config=config,
-            n_samples=None,  # All the dataset
+            n_samples=5,  # None,  # All the dataset
         )
     elif args.index in CLIMATIC_INDICES:
         dataset_processor = ClimaticDatasetHandler(
@@ -394,7 +394,8 @@ def main_train_pca(args):
     data = dataset_processor.preprocess_data()
 
     projected_data = extremes_processor.apply_pca(scaled_data=data)
-    extremes_processor.define_limits_bins(projected_data=projected_data)
+    limits_bins = extremes_processor.define_limits_bins(projected_data=projected_data)
+    extremes_processor.find_bins(projected_data=projected_data, limits_bins=limits_bins)
 
 
 def main_define_limits(args):
@@ -417,7 +418,7 @@ def main_define_limits(args):
 
 if __name__ == "__main__":
     args = parser_arguments().parse_args()
-    args.compute_variance = True
+    # args.compute_variance = True
     args.name = "eco"
     args.index = "EVI"
     args.n_samples = 5
