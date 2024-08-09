@@ -95,9 +95,13 @@ class DatasetHandler(ABC):
                 selected_locations.append((lon, lat))
         return selected_locations
 
-    @abstractmethod
     def _get_random_coordinates(self):
-        pass
+        lon_index = random.randint(0, self.data.longitude.sizes["longitude"] - 1)
+        lat_index = random.randint(0, self.data.latitude.sizes["latitude"] - 1)
+        return (
+            self.data.longitude[lon_index].item(),
+            self.data.latitude[lat_index].item(),
+        )
 
     def _is_valid_location(self, lon, lat):
         return (
@@ -108,9 +112,9 @@ class DatasetHandler(ABC):
         )
 
     def _has_acceptable_nan_percentage(self, lon, lat):
-        data_slice = self.data[self.variable_name].sel(longitude=lon, latitude=lat)
-        nan_count = np.isnan(data_slice).sum().values
-        nan_percentage = nan_count / data_slice.size
+        data_location = self.data[self.variable_name].sel(longitude=lon, latitude=lat)
+        nan_count = np.isnan(data_location).sum().values
+        nan_percentage = nan_count / data_location.size
         return nan_percentage < MAX_NAN_PERCENTAGE
 
     def _update_data_with_selected_locations(self, selected_locations):
@@ -153,7 +157,7 @@ class DatasetHandler(ABC):
             self._compute_and_combine_vsc()
 
         self._reduce_temporal_resolution()
-        self.data = self.data.drop_vars(["location", "longitude", "latitude"])
+        # self.data = self.data.drop_vars(["location", "longitude", "latitude"])
 
         # Rechunck the data per time serie
         self.data = self.data.chunk(
@@ -163,7 +167,7 @@ class DatasetHandler(ABC):
         # condition = self.data.map_blocks(
         #     lambda x: ~x.isnull().any(dim="dayofyear"),
         # )
-        condition = self.data.isnull().any(dim="dayofyear").compute()
+        condition = ~self.data.isnull().any(dim="dayofyear").compute()
         # Assuming 'self.data' is your Xarray DataArray
         # condition = da.map_blocks(
         #     lambda x: ~x.isnull().any(dim="dayofyear"), self.data, dtype=bool
@@ -218,7 +222,7 @@ class DatasetHandler(ABC):
         ) is None, "the min and max of the data are already defined."
         assert self.config.path_load_experiment is None, "A model is already loaded."
 
-        self.data = self.data.chunk({"dayofyear": 1, "location": 4000})
+        # self.data = self.data.chunk({"dayofyear": 1, "location": 12000})
         self.max_data = self.data.max(dim=["location"])
         self.min_data = self.data.min(dim=["location"])
         # Save min_data and max_data
@@ -272,19 +276,23 @@ class ClimaticDatasetHandler(DatasetHandler):
         # name of the variable in the xarray. self.variable_name
         self.variable_name = self.config.index
         self.data = xr.open_zarr(filepath)[[self.variable_name]]
+        self._transform_longitude()
         printt("Data loaded from {}".format(filepath))
+
+    def _transform_longitude(self):
+        # Transform the longitude coordinates
+        self.data = self.data.roll(
+            longitude=180 * 4, roll_coords=True
+        )  # Shifts the data of longitude of 180*4 elements, elements that roll past the end are re-introduced
+
+        # Transform the longitude coordinates to -180 and 180
+        self.data = self.data.assign_coords(
+            longitude=self._coordstolongitude(self.data.longitude)
+        )
 
     def _coordstolongitude(self, x):
         """Transform the longitude coordinates from between 0 and 360 to between -180 and 180."""
         return ((x + 180) % 360) - 180
-
-    def _get_random_coordinates(self):
-        lon_index = random.randint(0, self.data.longitude.sizes["longitude"] - 1)
-        lat_index = random.randint(0, self.data.latitude.sizes["latitude"] - 1)
-        return (
-            self._coordstolongitude(self.data.longitude[lon_index].item()),
-            self.data.latitude[lat_index].item(),
-        )
 
     def standardize_dataset(self):
         """
@@ -302,7 +310,7 @@ class ClimaticDatasetHandler(DatasetHandler):
         ), "Dimension missing"
         # Ensure longitude values are within the expected range
         assert (
-            (self.data.longitude >= 0) & (self.data.longitude <= 360)
+            (self.data.longitude >= -180) & (self.data.longitude <= 180)
         ).all(), "Longitude values should be in the range 0 to 360"
 
         # Remove the years before 1970 due to quality
@@ -316,15 +324,6 @@ class ClimaticDatasetHandler(DatasetHandler):
         )
         self.data = self.data.where(
             np.abs(self.data.latitude) >= SOUTH_POLE_THRESHOLD, drop=True
-        )
-        # Transform the longitude coordinates
-        self.data = self.data.roll(
-            longitude=180 * 4, roll_coords=True
-        )  # Shifts the data of longitude of 180*4 elements, elements that roll past the end are re-introduced
-
-        # Transform the longitude coordinates to -180 and 180
-        self.data = self.data.assign_coords(
-            longitude=self._coordstolongitude(self.data.longitude)
         )
 
         # Filter dataset to select Europe
@@ -389,14 +388,6 @@ class EcologicalDatasetHandler(DatasetHandler):
         self.data = self.data.coarsen(latitude=5, longitude=5, boundary="trim").mean()
         printt(
             f"Reduce the resolution from ({res_lat}, {res_lon}) to ({len(self.data.latitude)}, {len(self.data.longitude)})."
-        )
-
-    def _get_random_coordinates(self):
-        lon_index = random.randint(0, self.data.longitude.sizes["longitude"] - 1)
-        lat_index = random.randint(0, self.data.latitude.sizes["latitude"] - 1)
-        return (
-            self.data.longitude[lon_index].item(),
-            self.data.latitude[lat_index].item(),
         )
 
     def standardize_dataset(self):

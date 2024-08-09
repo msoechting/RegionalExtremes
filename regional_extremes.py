@@ -269,9 +269,11 @@ class RegionalExtremes:  # (InitializationConfig):
         """
         projection_path = self.config.saving_path / "pca_projection.zarr"
         data = xr.open_zarr(projection_path)
-        self.pca_projection = data.pca
-        self.explained_variance = data.explained_variance
+        pca_projection = data.pca.stack(location=("longitude", "latitude")).transpose(
+            "location", "component", ...
+        )
         printt("Projection loaded from {}".format(projection_path))
+        return pca_projection
 
     def define_limits_bins(self, projected_data: np.ndarray) -> list[np.ndarray]:
         """
@@ -329,6 +331,13 @@ class RegionalExtremes:  # (InitializationConfig):
             )
         np.save(limits_bins_path, limits_bins)
 
+    def _load_limits_bins(self):
+        """Saves the limits bins to a file."""
+        limits_bins_path = self.config.saving_path / "limits_bins.npy"
+        data = np.load(limits_bins_path)
+        printt("Limits bins loaded.")
+        return data
+
     # Function to find the box for multiple points
     def find_bins(self, projected_data, limits_bins):
         assert projected_data.shape[1] == len(limits_bins)
@@ -345,16 +354,23 @@ class RegionalExtremes:  # (InitializationConfig):
         for i, limits_bin in enumerate(limits_bins):
             box_indices[:, i] = np.digitize(projected_data[:, i], limits_bin)
 
+        self._save_bins(box_indices)
         return box_indices
 
-    def _save_bins(self, box_indices):
+    def _save_bins(self, boxes_indices):
         """Saves the bins to a file."""
-        boxes_path = self.config.saving_path / "boxes.zarr"
-        if os.path.exists(limits_bins_path):
+        bins_path = self.config.saving_path / "boxes.zarr"
+        if os.path.exists(bins_path):
             raise FileExistsError(
-                f"The file {limits_bins_path} already exists. Rewriting is not allowed."
+                f"The file {bins_path} already exists. Rewriting is not allowed."
             )
-        boxes.to_arr(boxes_path)
+        np.save(bins_path, boxes_indices)
+        printt("Boxes computed and saved.")
+
+    def _load_bins(self):
+        bins_path = self.config.saving_path / "bins.zarr"
+        data = xr.open_zarr(boxes_path)
+        return data
 
     def apply_threshold():
         raise NotImplementedError()
@@ -384,7 +400,7 @@ def main_train_pca(args):
     if args.index in ECOLOGICAL_INDICES:
         dataset_processor = EcologicalDatasetHandler(
             config=config,
-            n_samples=5,  # None,  # All the dataset
+            n_samples=None,  # None,  # All the dataset
         )
     elif args.index in CLIMATIC_INDICES:
         dataset_processor = ClimaticDatasetHandler(
@@ -419,10 +435,22 @@ def main_define_limits(args):
 if __name__ == "__main__":
     args = parser_arguments().parse_args()
     # args.compute_variance = True
-    args.name = "eco"
-    args.index = "EVI"
-    args.n_samples = 5
+    # args.name = "eco"
+    args.index = "pei_180"
+    args.n_samples = 1000
 
+    # args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-08-09_11:56:28"
+    # config = InitializationConfig(args)
+    #
+    # extremes_processor = RegionalExtremes(
+    #    config=config,
+    #    n_components=args.n_components,
+    #    n_bins=args.n_bins,
+    # )
+    # projected_data = extremes_processor.load_pca_projection()
+    # limits_bins = extremes_processor._load_limits_bins()
+    # extremes_processor.find_bins(projected_data, limits_bins)
+    #
     # To train the PCA:
     main_train_pca(args)
 

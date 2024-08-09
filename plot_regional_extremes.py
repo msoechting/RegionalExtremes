@@ -24,7 +24,7 @@ class PlotExtremes(InitializationConfig):
         self.saving_path.mkdir(parents=True, exist_ok=True)
         # self.projection = load_pca_projection
 
-    def load_pca_projection(self):
+    def _load_pca_projection(self):
         """
         Load data from the specified filepath.
 
@@ -37,11 +37,13 @@ class PlotExtremes(InitializationConfig):
         self.explained_variance = data.explained_variance
         printt("Projection loaded from {}".format(projection_path))
 
-    def load_bins(self):
-        projection_path = self.config.saving_path / "boxes.zarr"
-        # data =
+    def _load_boxes(self):
+        boxes_path = self.config.saving_path / "boxes.zarr"
+        data = xr.open_zarr(boxes_path)
+        return data
 
-    def plot_map_component(self):
+    def plot_map_component(self, normalization=False):
+        self._load_pca_projection()
         # Normalize the explained variance
         normalized_variance = (
             self.explained_variance.explained_variance
@@ -49,15 +51,17 @@ class PlotExtremes(InitializationConfig):
         )
 
         # Normalize the data to the range [0, 1]
-        def _normalization(index, normalization=False):
+        def _normalization(index, normalization):
             band = self.pca_projection.isel(component=index).values
 
-            # (band - np.min(band)) / (np.max(band) - np.min(band))
-            # We normalize with the 5% and 95% quantiles due to outliers.
-            normalized_band = (band - np.quantile(band, q=0.05)) / (
-                np.quantile(band, q=0.95) - np.quantile(band, q=0.05)
+            normalized_band = (band - np.nanmin(band)) / (
+                np.nanmax(band) - np.nanmin(band)
             )
-            # We normalize the color by feature importance
+            # We normalize with the 5% and 95% quantiles due to outliers.
+            # normalized_band = (band - np.quantile(band, q=0.05)) / (
+            #     np.quantile(band, q=0.95) - np.quantile(band, q=0.05)
+            # )
+            # # Normalization of the color by feature importance
             if normalization:
                 normalized_band = (
                     normalized_band * normalized_variance.sel(component=index).values
@@ -65,9 +69,15 @@ class PlotExtremes(InitializationConfig):
 
             return normalized_band
 
-        normalized_red = _normalization(0)  # Red is the first component
-        normalized_green = _normalization(1)  # Green is the second component
-        normalized_blue = _normalization(2)  # blue is the third component
+        normalized_red = _normalization(
+            0, normalization=normalization
+        )  # Red is the first component
+        normalized_green = _normalization(
+            1, normalization=normalization
+        )  # Green is the second component
+        normalized_blue = _normalization(
+            2, normalization=normalization
+        )  # blue is the third component
 
         # Stack the components into a 3D array
         rgb_normalized = np.dstack((normalized_red, normalized_green, normalized_blue))
@@ -113,16 +123,15 @@ class PlotExtremes(InitializationConfig):
 
     def plot_region(self):
         """plot the samples of a single region"""
-
-        def _get_random_coordinates(self):
-            lon_index = random.randint(0, self.data.longitude.sizes["longitude"] - 1)
-            lat_index = random.randint(0, self.data.latitude.sizes["latitude"] - 1)
-            return (
-                self.data.longitude[lon_index].item(),
-                self.data.latitude[lat_index].item(),
-            )
+        boxes = self._load_boxes()
+        if lon is None and lat is None:
+            lon = random.choice(self.data.longitude).item()
+            lat = random.choice(self.data.latitude).item()
 
         lon, lat = self._get_random_coordinates()
+        print(boxes)
+        print(boxes.sel(lat, lon))
+        indices = boxes.sel(lat, lon)
 
     def plot_boxes_msc(box_indices, n_bins):
         # find_boxes(pca_components, pca_bins)
@@ -167,9 +176,8 @@ class PlotExtremes(InitializationConfig):
 if __name__ == "__main__":
     args = parser_arguments().parse_args()
 
-    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-08-07_13:48:38_eco"
+    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-08-09_11:24:08_2139427_Europe_eco_small"
     config = InitializationConfig(args)
 
     plot = PlotExtremes(config=config)
-    plot.load_pca_projection()
     plot.plot_map_component()
