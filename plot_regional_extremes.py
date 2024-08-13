@@ -176,8 +176,8 @@ class PlotExtremes(InitializationConfig):
 if __name__ == "__main__":
     args = parser_arguments().parse_args()
 
-    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-08-09_11:24:08_2139427_Europe_eco_small"
+    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-08-09_12:45:09_2139535_Europe_eco_small"
     config = InitializationConfig(args)
 
     plot = PlotExtremes(config=config)
-    plot.plot_map_component()
+    # plot.plot_map_component()

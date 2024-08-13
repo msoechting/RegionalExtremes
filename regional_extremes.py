@@ -359,7 +359,7 @@ class RegionalExtremes:  # (InitializationConfig):
 
     def _save_bins(self, boxes_indices):
         """Saves the bins to a file."""
-        bins_path = self.config.saving_path / "boxes.zarr"
+        bins_path = self.config.saving_path / "boxes.npy"
         if os.path.exists(bins_path):
             raise FileExistsError(
                 f"The file {bins_path} already exists. Rewriting is not allowed."
@@ -436,23 +436,23 @@ if __name__ == "__main__":
     args = parser_arguments().parse_args()
     # args.compute_variance = True
     # args.name = "eco"
-    args.index = "pei_180"
+    args.index = "EVI"
     args.n_samples = 1000
 
-    # args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-08-09_11:56:28"
-    # config = InitializationConfig(args)
-    #
-    # extremes_processor = RegionalExtremes(
-    #    config=config,
-    #    n_components=args.n_components,
-    #    n_bins=args.n_bins,
-    # )
-    # projected_data = extremes_processor.load_pca_projection()
-    # limits_bins = extremes_processor._load_limits_bins()
-    # extremes_processor.find_bins(projected_data, limits_bins)
-    #
+    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-07-25_14:22:55_data_msc_vsc"
+    config = InitializationConfig(args)
+
+    extremes_processor = RegionalExtremes(
+        config=config,
+        n_components=args.n_components,
+        n_bins=args.n_bins,
+    )
+    projected_data = extremes_processor.load_pca_projection()
+    limits_bins = extremes_processor._load_limits_bins()
+    extremes_processor.find_bins(projected_data, limits_bins)
+
     # To train the PCA:
-    main_train_pca(args)
+    # main_train_pca(args)
 
     # To define the limits:
     # main_define_limits(args)
