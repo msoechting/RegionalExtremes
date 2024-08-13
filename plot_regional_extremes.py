@@ -2,7 +2,7 @@ import xarray as xr
 import numpy as np
 import matplotlib.pyplot as plt
 import cartopy
-
+import random
 
 from config import InitializationConfig
 from regional_extremes import parser_arguments
@@ -39,7 +39,7 @@ class PlotExtremes(InitializationConfig):
 
     def _load_boxes(self):
         boxes_path = self.config.saving_path / "boxes.zarr"
-        data = xr.open_zarr(boxes_path)
+        data = xr.open_zarr(boxes_path).bins
         return data
 
     def plot_map_component(self, normalization=False):
@@ -121,7 +121,7 @@ class PlotExtremes(InitializationConfig):
         # Show the plot
         plt.show()
 
-    def plot_region(self):
+    def plot_region(self, lon=None, lat=None):
         """plot the samples of a single region"""
         boxes = self._load_boxes()
         if lon is None and lat is None:
@@ -180,4 +180,5 @@ if __name__ == "__main__":
     config = InitializationConfig(args)
 
     plot = PlotExtremes(config=config)
+    plot.plot_region()
     # plot.plot_map_component()

@@ -351,20 +351,38 @@ class RegionalExtremes:  # (InitializationConfig):
         box_indices = np.zeros(
             (projected_data.shape[0], projected_data.shape[1]), dtype=int
         )
+        # defines boxes
         for i, limits_bin in enumerate(limits_bins):
+            # get the indices of the bins to which each value in input array belongs.
             box_indices[:, i] = np.digitize(projected_data[:, i], limits_bin)
 
-        self._save_bins(box_indices)
+        self._save_bins(box_indices, projected_data)
         return box_indices
 
-    def _save_bins(self, boxes_indices):
+    def _save_bins(self, boxes_indices, projected_data):
         """Saves the bins to a file."""
-        bins_path = self.config.saving_path / "boxes.npy"
+
+        # Create the new DataArray
+        component = np.arange(self.n_components)
+
+        boxes_indices = xr.DataArray(
+            data=boxes_indices,
+            dims=["location", "component"],
+            coords={
+                "longitude": projected_data.longitude,
+                "latitude": projected_data.latitude,
+                "component": component,
+            },
+            name="bins",
+        )
+
+        bins_path = self.config.saving_path / "boxes.zarr"
         if os.path.exists(bins_path):
             raise FileExistsError(
                 f"The file {bins_path} already exists. Rewriting is not allowed."
             )
-        np.save(bins_path, boxes_indices)
+        boxes_indices.to_zarr(bins_path)
+        # np.save(bins_path, boxes_indices)
         printt("Boxes computed and saved.")
 
     def _load_bins(self):
@@ -439,20 +457,20 @@ if __name__ == "__main__":
     args.index = "EVI"
     args.n_samples = 1000
 
-    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-07-25_14:22:55_data_msc_vsc"
-    config = InitializationConfig(args)
+    # args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-08-09_12:45:09_2139535_Europe_eco_small"
+    # config = InitializationConfig(args)
+#
+# extremes_processor = RegionalExtremes(
+#    config=config,
+#    n_components=args.n_components,
+#    n_bins=args.n_bins,
+# )
+# projected_data = extremes_processor.load_pca_projection()
+# limits_bins = extremes_processor._load_limits_bins()
+# extremes_processor.find_bins(projected_data, limits_bins)
 
-    extremes_processor = RegionalExtremes(
-        config=config,
-        n_components=args.n_components,
-        n_bins=args.n_bins,
-    )
-    projected_data = extremes_processor.load_pca_projection()
-    limits_bins = extremes_processor._load_limits_bins()
-    extremes_processor.find_bins(projected_data, limits_bins)
+# To train the PCA:
+# main_train_pca(args)
 
-    # To train the PCA:
-    # main_train_pca(args)
-
-    # To define the limits:
-    # main_define_limits(args)
+# To define the limits:
+# main_define_limits(args)
