@@ -58,6 +58,3 @@ def timing_decorator(func):
         return result
 
     return wrapper
-
-
-# class Loader:

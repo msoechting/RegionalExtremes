@@ -16,6 +16,7 @@ import os
 
 
 from utils import initialize_logger, printt, int_or_none
+from loader import Loader, Saver
 from datahandler import ClimaticDatasetHandler, EcologicalDatasetHandler
 from config import InitializationConfig, CLIMATIC_INDICES, ECOLOGICAL_INDICES
 
@@ -128,24 +129,18 @@ class RegionalExtremes:  # (InitializationConfig):
         self.config = config
         self.n_components = n_components
         self.n_bins = n_bins
+        self.loader = Loader(config)
+        self.saver = Saver(config)
         # self.pca_handler = PCAHandler()
         # self.limits_bins_handler = LimitsAndBinsHandler()
 
         #       class PCAHandler(RegionalExtremes):
         # def __init__(self):
         if self.config.path_load_experiment:
-            self._load_pca_matrix()
+            self.loader._load_pca_matrix()
         else:
             # Initialize a new PCA.
             self.pca = PCA(n_components=self.n_components)
-
-    def _load_pca_matrix(self):
-        """
-        Load PCA matrix from the file.
-        """
-        pca_path = self.config.saving_path / "pca_matrix.pkl"
-        with open(pca_path, "rb") as f:
-            self.pca = pk.load(f)
 
     def compute_pca_and_transform(
         self,
@@ -205,7 +200,7 @@ class RegionalExtremes:  # (InitializationConfig):
         )
         printt("Data are projected in the feature space.")
 
-        self._save_pca_projection(transformed_data)
+        self.saver._save_pca_projection(transformed_data)
         return transformed_data
 
     def _validate_scaled_data(self, scaled_data: np.ndarray) -> None:
@@ -218,62 +213,6 @@ class RegionalExtremes:  # (InitializationConfig):
             raise ValueError(
                 f"scaled_data should have {expected_shape} columns, but has {scaled_data.shape[1]} columns."
             )
-
-    def _save_pca_projection(self, pca_projection) -> None:
-        """Saves the limits bins to a file."""
-        # Split the components into separate DataArrays
-        # Create a new coordinate for the 'component' dimension
-        component = np.arange(self.n_components)
-
-        # Create the new DataArray
-        pca_projection = xr.DataArray(
-            data=pca_projection.values,
-            dims=["location", "component"],
-            coords={
-                "location": pca_projection.location,
-                "component": component,
-            },
-            name="pca",
-        )
-        # Unstack location for longitude and latitude as dimensions
-        pca_projection = pca_projection.set_index(
-            location=["longitude", "latitude"]
-        ).unstack("location")
-
-        # Explained variance for each component
-        explained_variance = xr.DataArray(
-            self.pca.explained_variance_ratio_,  # Example values for explained variance
-            dims=["component"],
-            coords={"component": component},
-        )
-        pca_projection["explained_variance"] = explained_variance
-
-        # Saving path
-        pca_projection_path = self.config.saving_path / "pca_projection.zarr"
-
-        if os.path.exists(pca_projection_path):
-            raise FileExistsError(
-                f"The file {pca_projection_path} already exists. Rewriting is not allowed."
-            )
-
-        # Saving the data
-        pca_projection.to_zarr(pca_projection_path)
-        printt("Projection saved.")
-
-    def load_pca_projection(self):
-        """
-        Load data from the specified filepath.
-
-        Parameters:
-        filepath (str): Path to the data file.
-        """
-        projection_path = self.config.saving_path / "pca_projection.zarr"
-        data = xr.open_zarr(projection_path)
-        pca_projection = data.pca.stack(location=("longitude", "latitude")).transpose(
-            "location", "component", ...
-        )
-        printt("Projection loaded from {}".format(projection_path))
-        return pca_projection
 
     def define_limits_bins(self, projected_data: np.ndarray) -> list[np.ndarray]:
         """
@@ -292,7 +231,7 @@ class RegionalExtremes:  # (InitializationConfig):
         """
         self._validate_inputs(projected_data)
         limits_bins = self._calculate_limits_bins(projected_data)
-        self._save_limits_bins(limits_bins)
+        self.saver._limits_bins(limits_bins)
         printt("Limits are computed and saved.")
         return limits_bins
 
@@ -322,22 +261,6 @@ class RegionalExtremes:  # (InitializationConfig):
             for component in range(self.n_components)
         ]
 
-    def _save_limits_bins(self, limits_bins: list[np.ndarray]) -> None:
-        """Saves the limits bins to a file."""
-        limits_bins_path = self.config.saving_path / "limits_bins.npy"
-        if os.path.exists(limits_bins_path):
-            raise FileExistsError(
-                f"The file {limits_bins_path} already exists. Rewriting is not allowed."
-            )
-        np.save(limits_bins_path, limits_bins)
-
-    def _load_limits_bins(self):
-        """Saves the limits bins to a file."""
-        limits_bins_path = self.config.saving_path / "limits_bins.npy"
-        data = np.load(limits_bins_path)
-        printt("Limits bins loaded.")
-        return data
-
     # Function to find the box for multiple points
     def find_bins(self, projected_data, limits_bins):
         assert projected_data.shape[1] == len(limits_bins)
@@ -355,43 +278,8 @@ class RegionalExtremes:  # (InitializationConfig):
         for i, limits_bin in enumerate(limits_bins):
             # get the indices of the bins to which each value in input array belongs.
             box_indices[:, i] = np.digitize(projected_data[:, i], limits_bin)
-        self._save_bins(box_indices, projected_data)
+        self.saver._save_bins(box_indices, projected_data)
         return box_indices
-
-    def _save_bins(self, boxes_indices, projected_data):
-        """Saves the bins to a file."""
-
-        # Create the new DataArray
-        component = np.arange(self.n_components)
-
-        boxes_indices = xr.DataArray(
-            data=boxes_indices,
-            dims=["location", "component"],
-            coords={
-                "location": projected_data.location,
-                "component": component,
-            },
-            name="bins",
-        )
-
-        # Unstack location for longitude and latitude as dimensions
-        boxes_indices = boxes_indices.set_index(
-            location=["longitude", "latitude"]
-        ).unstack("location")
-
-        bins_path = self.config.saving_path / "boxes.zarr"
-        if os.path.exists(bins_path):
-            raise FileExistsError(
-                f"The file {bins_path} already exists. Rewriting is not allowed."
-            )
-        boxes_indices.to_zarr(bins_path)
-        # np.save(bins_path, boxes_indices)
-        printt("Boxes computed and saved.")
-
-    def _load_bins(self):
-        bins_path = self.config.saving_path / "bins.zarr"
-        data = xr.open_zarr(boxes_path)
-        return data
 
     def apply_threshold():
         raise NotImplementedError()
@@ -467,8 +355,8 @@ if __name__ == "__main__":
         n_components=args.n_components,
         n_bins=args.n_bins,
     )
-    projected_data = extremes_processor.load_pca_projection()
-    limits_bins = extremes_processor._load_limits_bins()
+    projected_data = extremes_processor.loader._load_pca_projection()
+    limits_bins = extremes_processor.loader._load_limits_bins()
     extremes_processor.find_bins(projected_data, limits_bins)
 
     # To train the PCA:
