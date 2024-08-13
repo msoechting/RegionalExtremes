@@ -355,7 +355,6 @@ class RegionalExtremes:  # (InitializationConfig):
         for i, limits_bin in enumerate(limits_bins):
             # get the indices of the bins to which each value in input array belongs.
             box_indices[:, i] = np.digitize(projected_data[:, i], limits_bin)
-
         self._save_bins(box_indices, projected_data)
         return box_indices
 
@@ -369,12 +368,16 @@ class RegionalExtremes:  # (InitializationConfig):
             data=boxes_indices,
             dims=["location", "component"],
             coords={
-                "longitude": projected_data.longitude,
-                "latitude": projected_data.latitude,
+                "location": projected_data.location,
                 "component": component,
             },
             name="bins",
         )
+
+        # Unstack location for longitude and latitude as dimensions
+        boxes_indices = boxes_indices.set_index(
+            location=["longitude", "latitude"]
+        ).unstack("location")
 
         bins_path = self.config.saving_path / "boxes.zarr"
         if os.path.exists(bins_path):
@@ -457,20 +460,18 @@ if __name__ == "__main__":
     args.index = "EVI"
     args.n_samples = 1000
 
-    # args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-08-09_12:45:09_2139535_Europe_eco_small"
-    # config = InitializationConfig(args)
-#
-# extremes_processor = RegionalExtremes(
-#    config=config,
-#    n_components=args.n_components,
-#    n_bins=args.n_bins,
-# )
-# projected_data = extremes_processor.load_pca_projection()
-# limits_bins = extremes_processor._load_limits_bins()
-# extremes_processor.find_bins(projected_data, limits_bins)
+    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-08-09_12:45:09_2139535_Europe_eco_small"
+    config = InitializationConfig(args)
+    extremes_processor = RegionalExtremes(
+        config=config,
+        n_components=args.n_components,
+        n_bins=args.n_bins,
+    )
+    projected_data = extremes_processor.load_pca_projection()
+    limits_bins = extremes_processor._load_limits_bins()
+    extremes_processor.find_bins(projected_data, limits_bins)
 
-# To train the PCA:
-# main_train_pca(args)
-
-# To define the limits:
-# main_define_limits(args)
+    # To train the PCA:
+    # main_train_pca(args)
+    # To define the limits:
+    # main_define_limits(args)

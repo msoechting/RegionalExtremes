@@ -48,6 +48,7 @@ def printt(message: str):
     logger.printt(message)
 
 
+# Not yer used
 def timing_decorator(func):
     def wrapper(*args, **kwargs):
         start_time = time.time()
@@ -57,3 +58,6 @@ def timing_decorator(func):
         return result
 
     return wrapper
+
+
+# class Loader:
