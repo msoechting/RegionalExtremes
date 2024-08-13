@@ -157,24 +157,15 @@ class DatasetHandler(ABC):
             self._compute_and_combine_vsc()
 
         self._reduce_temporal_resolution()
-        # self.data = self.data.drop_vars(["location", "longitude", "latitude"])
 
         # Rechunck the data per time serie
         self.data = self.data.chunk(
             {"dayofyear": len(self.data.dayofyear), "location": 1}
         )
-        # Use map_blocks to compute the condition in parallel
-        # condition = self.data.map_blocks(
-        #     lambda x: ~x.isnull().any(dim="dayofyear"),
-        # )
+        # Remove NaNs
         condition = ~self.data.isnull().any(dim="dayofyear").compute()
-        # Assuming 'self.data' is your Xarray DataArray
-        # condition = da.map_blocks(
-        #     lambda x: ~x.isnull().any(dim="dayofyear"), self.data, dtype=bool
-        # ).compute()
-
         self.data = self.data.where(condition, drop=True)
-        printt("NaN removed.")
+        printt("NaNs removed.")
 
         self._get_min_max_data()
         self._scale_data()
@@ -265,6 +256,7 @@ class ClimaticDatasetHandler(DatasetHandler):
             raise ValueError(
                 "Index unavailable. Index available:\n -Climatic: 'pei_30', 'pei_90', 'pei_180'."
             )
+        return self.data
 
     def load_data(self, filepath):
         """
@@ -273,6 +265,8 @@ class ClimaticDatasetHandler(DatasetHandler):
         Parameters:
         filepath (str): Path to the data file.
         """
+        if not filepath:
+            filepath = CLIMATIC_FILEPATH(self.config.index)
         # name of the variable in the xarray. self.variable_name
         self.variable_name = self.config.index
         self.data = xr.open_zarr(filepath)[[self.variable_name]]
@@ -349,25 +343,29 @@ class EcologicalDatasetHandler(DatasetHandler):
         if self.config.index in ECOLOGICAL_INDICES:
             filepath = ECOLOGICAL_FILEPATH(self.config.index)
             self.load_data(filepath)
-            self.stackdims()
             self.reduce_resolution()
         else:
             raise NotImplementedError(
                 f"Index {self.config.index} unavailable. Ecological Index available: {ECOLOGICAL_INDICES}."
             )
+        return self.data
 
-    def load_data(self, filepath):
+    def load_data(self, filepath=None):
         """
         Load data from the specified filepath.
 
         Parameters:
         filepath (str): Path to the data file.
         """
+        if not filepath:
+            filepath = ECOLOGICAL_FILEPATH(self.config.index)
+
         self.variable_name = VARIABLE_NAME(self.config.index)
         self.data = xr.open_zarr(filepath, consolidated=False)[[self.variable_name]]
         printt("Data loaded from {}".format(filepath))
+        self._stackdims()
 
-    def stackdims(self):
+    def _stackdims(self):
         self.data = self.data.stack(
             {
                 "latitude": ["latchunk", "latstep_modis"],
