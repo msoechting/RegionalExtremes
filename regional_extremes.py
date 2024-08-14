@@ -17,7 +17,7 @@ import os
 
 from utils import initialize_logger, printt, int_or_none
 from loader import Loader, Saver
-from datahandler import ClimaticDatasetHandler, EcologicalDatasetHandler
+from datahandler import create_handler
 from config import InitializationConfig, CLIMATIC_INDICES, ECOLOGICAL_INDICES
 
 np.set_printoptions(threshold=sys.maxsize)
@@ -131,13 +131,9 @@ class RegionalExtremes:  # (InitializationConfig):
         self.n_bins = n_bins
         self.loader = Loader(config)
         self.saver = Saver(config)
-        # self.pca_handler = PCAHandler()
-        # self.limits_bins_handler = LimitsAndBinsHandler()
 
-        #       class PCAHandler(RegionalExtremes):
-        # def __init__(self):
         if self.config.path_load_experiment:
-            self.loader._load_pca_matrix()
+            self.pca = self.loader._load_pca_matrix()
         else:
             # Initialize a new PCA.
             self.pca = PCA(n_components=self.n_components)
@@ -200,7 +196,9 @@ class RegionalExtremes:  # (InitializationConfig):
         )
         printt("Data are projected in the feature space.")
 
-        self.saver._save_pca_projection(transformed_data)
+        self.saver._save_pca_projection(
+            transformed_data, self.pca.explained_variance_ratio_
+        )
         return transformed_data
 
     def _validate_scaled_data(self, scaled_data: np.ndarray) -> None:
@@ -231,7 +229,7 @@ class RegionalExtremes:  # (InitializationConfig):
         """
         self._validate_inputs(projected_data)
         limits_bins = self._calculate_limits_bins(projected_data)
-        self.saver._limits_bins(limits_bins)
+        self.saver._save_limits_bins(limits_bins)
         printt("Limits are computed and saved.")
         return limits_bins
 
@@ -252,8 +250,10 @@ class RegionalExtremes:  # (InitializationConfig):
         """Calculates the limits bins for each component."""
         return [
             np.linspace(
-                np.min(projected_data[:, component]),
-                np.max(projected_data[:, component]),
+                # np.min(projected_data[:, component]),
+                # np.max(projected_data[:, component]),
+                np.quantile(projected_data[:, component], 0.05),
+                np.quantile(projected_data[:, component], 0.95),
                 self.n_bins + 1,
             )[
                 1:-1
@@ -270,7 +270,6 @@ class RegionalExtremes:  # (InitializationConfig):
         assert (
             limits_bins[0].shape[0] == self.n_bins - 1
         ), "the limits do not fit the number of bins"
-
         box_indices = np.zeros(
             (projected_data.shape[0], projected_data.shape[1]), dtype=int
         )
@@ -287,16 +286,19 @@ class RegionalExtremes:  # (InitializationConfig):
 
 def main_train_pca(args):
     config = InitializationConfig(args)
-    if args.index in ECOLOGICAL_INDICES:
-        dataset_processor = EcologicalDatasetHandler(
-            config=config,
-            n_samples=args.n_samples,
-        )
-    elif args.index in CLIMATIC_INDICES:
-        dataset_processor = ClimaticDatasetHandler(
-            config=config,
-            n_samples=args.n_samples,
-        )
+    dataset_processor = create_handler(
+        config=config, n_samples=args.n_samples  # args.n_samples,  # all the dataset
+    )
+    # if args.index in ECOLOGICAL_INDICES:
+    #     dataset_processor = EcologicalDatasetHandler(
+    #         config=config,
+    #         n_samples=args.n_samples,
+    #     )
+    # elif args.index in CLIMATIC_INDICES:
+    #     dataset_processor = ClimaticDatasetHandler(
+    #         config=config,
+    #         n_samples=args.n_samples,
+    #     )
     data_subset = dataset_processor.preprocess_data()
     extremes_processor = RegionalExtremes(
         config=config,
@@ -306,16 +308,7 @@ def main_train_pca(args):
     projected_data = extremes_processor.compute_pca_and_transform(
         scaled_data=data_subset
     )
-    if args.index in ECOLOGICAL_INDICES:
-        dataset_processor = EcologicalDatasetHandler(
-            config=config,
-            n_samples=None,  # None,  # All the dataset
-        )
-    elif args.index in CLIMATIC_INDICES:
-        dataset_processor = ClimaticDatasetHandler(
-            config=config,
-            n_samples=None,  # All the dataset
-        )
+    dataset_processor = create_handler(config=config, n_samples=None)  # all the dataset
     data = dataset_processor.preprocess_data()
 
     projected_data = extremes_processor.apply_pca(scaled_data=data)
@@ -327,9 +320,9 @@ def main_define_limits(args):
     args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-08-07_16:06:37_eco_small"
     config = InitializationConfig(args)
 
-    dataset_processor = EcologicalDatasetHandler(
+    dataset_processor = DatasetHandler(
         config=config, n_samples=None  # args.n_samples,  # all the dataset
-    )
+    ).create_handler()
     data = dataset_processor.preprocess_data()
 
     extremes_processor = RegionalExtremes(
@@ -343,23 +336,23 @@ def main_define_limits(args):
 
 if __name__ == "__main__":
     args = parser_arguments().parse_args()
-    # args.compute_variance = True
-    # args.name = "eco"
+    args.name = "eco_big_variance"
     args.index = "EVI"
     args.n_samples = 1000
+    args.compute_variance = True
 
-    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-08-09_12:45:09_2139535_Europe_eco_small"
-    config = InitializationConfig(args)
-    extremes_processor = RegionalExtremes(
-        config=config,
-        n_components=args.n_components,
-        n_bins=args.n_bins,
-    )
-    projected_data = extremes_processor.loader._load_pca_projection()
-    limits_bins = extremes_processor.loader._load_limits_bins()
-    extremes_processor.find_bins(projected_data, limits_bins)
+    # args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-08-09_12:45:09_2139535_Europe_eco_small"
+    # config = InitializationConfig(args)
+    # extremes_processor = RegionalExtremes(
+    #     config=config,
+    #     n_components=args.n_components,
+    #     n_bins=args.n_bins,
+    # )
+    # projected_data = extremes_processor.loader._load_pca_projection()
+    # limits_bins = extremes_processor.define_limits_bins(projected_data=projected_data)
+    # extremes_processor.find_bins(projected_data, limits_bins)
 
     # To train the PCA:
-    # main_train_pca(args)
+    main_train_pca(args)
     # To define the limits:
     # main_define_limits(args)

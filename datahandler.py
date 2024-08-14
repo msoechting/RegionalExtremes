@@ -28,6 +28,18 @@ ECOLOGICAL_FILEPATH = (
     lambda index: f"/Net/Groups/BGI/work_1/scratch/fluxcom/upscaling_inputs/MODIS_VI_perRegion061/{index}/Groups_{index}gapfilled_QCdyn.zarr"
 )
 VARIABLE_NAME = lambda index: f"{index}gapfilled_QCdyn"
+CLIMATIC_INDICES = ["pei_30", "pei_90", "pei_180"]
+ECOLOGICAL_INDICES = ["EVI", "NDVI", "kNDVI"]
+
+
+@staticmethod
+def create_handler(config, n_samples):
+    if config.index in ECOLOGICAL_INDICES:
+        return EcologicalDatasetHandler(config=config, n_samples=n_samples)
+    elif config.index in CLIMATIC_INDICES:
+        return ClimaticDatasetHandler(config=config, n_samples=n_samples)
+    else:
+        raise ValueError("Invalid index")
 
 
 class DatasetHandler(ABC):
@@ -186,8 +198,6 @@ class DatasetHandler(ABC):
             self.data[self.variable_name]
             .groupby("time.dayofyear")
             .var("time", skipna=True)
-            .drop_vars(["location", "longitude", "latitude"])
-            .dropna(dim="time", how="any")
         )
         msc_vsc = xr.concat([self.data["msc"], self.data["vsc"]], dim="dayofyear")
         total_days = len(msc_vsc.dayofyear)
@@ -196,7 +206,7 @@ class DatasetHandler(ABC):
         printt("Variance is computed")
 
     def _reduce_temporal_resolution(self):
-        self.data = self.data["msc"].isel(
+        self.data = self.data.isel(
             dayofyear=slice(1, len(self.data.dayofyear), self.config.time_resolution)
         )
 

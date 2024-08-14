@@ -34,28 +34,24 @@ class PlotExtremes(InitializationConfig):
         """
         projection_path = self.config.saving_path / "pca_projection.zarr"
         data = xr.open_zarr(projection_path)
-        self.pca_projection = data.pca
-        self.explained_variance = data.explained_variance
+        pca_projection = data.pca
+        explained_variance = data.explained_variance
         printt("Projection loaded from {}".format(projection_path))
-        return self.pca_projection
+        return pca_projection, explained_variance
 
-    def _load_boxes(self):
-        boxes_path = self.config.saving_path / "boxes.zarr"
-        data = xr.open_zarr(boxes_path).bins
-        data = data.stack(location=("longitude", "latitude"))
-        return data
-
-    def plot_map_component(self, normalization=False):
-        self._load_pca_projection()
+    def map_component(self, normalization=False):
+        pca_projection, explained_variance = self.loader._load_pca_projection(
+            explained_variance=True
+        )
         # Normalize the explained variance
         normalized_variance = (
-            self.explained_variance.explained_variance
-            / self.explained_variance.explained_variance.sum()
+            explained_variance.explained_variance
+            / explained_variance.explained_variance.sum()
         )
 
         # Normalize the data to the range [0, 1]
         def _normalization(index, normalization):
-            band = self.pca_projection.isel(component=index).values
+            band = pca_projection.isel(component=index).values
 
             normalized_band = (band - np.nanmin(band)) / (
                 np.nanmax(band) - np.nanmin(band)
@@ -124,9 +120,9 @@ class PlotExtremes(InitializationConfig):
         # Show the plot
         plt.show()
 
-    def plot_region(self, lon=None, lat=None):
+    def region(self, lon=None, lat=None):
         """plot the samples of a single region"""
-        boxes = self._load_boxes()
+        boxes = self.loader._load_bins().T
 
         # Select randomly a first location
         if lon is None and lat is None:
@@ -135,7 +131,7 @@ class PlotExtremes(InitializationConfig):
         # Get the boxe indices of the location
         indices = boxes.sel(longitude=lon, latitude=lat).values
 
-        indices = np.array([1, 1, 1])
+        # indices = np.array([19, 16, 13])
         # Create a boolean mask for the subset
         mask = np.all(boxes.values == indices[:, np.newaxis], axis=0)
 
@@ -144,8 +140,11 @@ class PlotExtremes(InitializationConfig):
         masked_lats = boxes.latitude.values[mask]
         masked_lons_lats = list(zip(masked_lons, masked_lats))
         printt(f"Number of samples in the region {indices}: {len(masked_lons_lats)}.")
+        if len(masked_lons_lats) == 0:
+            printt(f"No samples in the region {indices}.")
+            return
 
-        def plot_map_single_region(mask):
+        def map_single_region(mask):
             # Get the subset of data using the mask
             subset = boxes.isel(location=mask)
             # Plot the subset
@@ -162,7 +161,7 @@ class PlotExtremes(InitializationConfig):
 
             # Add coastlines and set global extent
             ax.coastlines()
-            ax.add_feature(cartopy.feature.OCEAN, zorder=100, edgecolor="k")
+            # ax.add_feature(cartopy.feature.OCEAN, zorder=100, edgecolor="k")
 
             # Plot the points
             ax.scatter(
@@ -175,6 +174,7 @@ class PlotExtremes(InitializationConfig):
 
             # Add a title
             plt.title(f"Location of samples of the region {indices}.")
+            plt.show()
 
             # Save the figure
             map_saving_path = (
@@ -184,7 +184,7 @@ class PlotExtremes(InitializationConfig):
             plt.close()
             printt("Plot saved")
 
-        def plot_time_series_single_region(masked_lons_lats):
+        def time_series_single_region(masked_lons_lats):
             if len(masked_lons_lats) > 10:
                 masked_lons_lats = random.choices(masked_lons_lats, k=10)
                 printt(f"Selected locations: {masked_lons_lats}")
@@ -203,7 +203,7 @@ class PlotExtremes(InitializationConfig):
             data = data.chunk({"time": len(data.time), "location": 1})
             # Remove NaNs
 
-            def plot_ts(data):
+            def time_series(data):
                 # Create a figure and axis
                 fig, ax = plt.subplots(figsize=(12, 8))
                 # Plot each location
@@ -226,7 +226,7 @@ class PlotExtremes(InitializationConfig):
                 saving_path = self.saving_path / f"ts_single_region_{indices}.png"
                 plt.savefig(saving_path)
 
-            def plot_msc_vsc(data):
+            def msc_vsc(data):
                 msc = data.groupby("time.dayofyear").mean("time", skipna=True)
                 msc = msc.chunk({"dayofyear": len(msc.dayofyear), "location": 1})
                 vsc = data.groupby("time.dayofyear").var("time", skipna=True)
@@ -261,23 +261,24 @@ class PlotExtremes(InitializationConfig):
                 plt.tight_layout()
                 plt.subplots_adjust(hspace=0.3)
 
+                plt.show()
+
                 saving_path = self.saving_path / f"msc_vsc_single_region_{indices}.png"
                 plt.savefig(saving_path)
 
-                plt.show()
+            time_series(data)
+            msc_vsc(data)
 
-            plot_ts(data)
-            plot_msc_vsc(data)
+        map_single_region(mask)
+        time_series_single_region(masked_lons_lats)
 
-        plot_map_single_region(mask)
-        plot_time_series_single_region(masked_lons_lats)
-
-    def plot_boxes_msc(self):
-        # find_boxes(pca_components, pca_bins)
-        pca_projection = self._load_pca_projection()
-        pca_projection = pca_projection.stack(location=("longitude", "latitude"))
+    def plot_3D_pca(self):
+        pca_projection, explained_variance = self.loader._load_pca_projection(
+            explained_variance=True
+        )
         n_bins = self.config.n_bins
-        box_indices = self._load_boxes()
+        box_indices = self.loader._load_bins()
+
         # Convert box indices to RGB colors
         # Normalize indices to the range [0, 1] for RGB
         colors = box_indices / (n_bins + 1)
@@ -290,7 +291,7 @@ class PlotExtremes(InitializationConfig):
             pca_projection.isel(component=0).values.T,
             pca_projection.isel(component=1).values.T,
             pca_projection.isel(component=2).values.T,
-            c=colors.values.T,
+            c=colors.values,
             s=50,
             edgecolor="k",
         )
@@ -301,16 +302,73 @@ class PlotExtremes(InitializationConfig):
         ax.set_zlabel("PCA Component 3")
         ax.set_title("3D PCA Projection with RGB Colors")
         ax.legend()
+
+        saving_path = self.saving_path / "3D_pca.png"
+        plt.savefig(saving_path)
+
         plt.show()
         return
+
+    def distribution_per_region(self):
+        boxes = self._load_boxes()
+        boxes = boxes.T
+
+        # Count occurrences
+        unique, counts = np.unique(boxes.values, axis=0, return_counts=True)
+
+        # Sort the unique values and counts in descending order of counts
+        sorted_indices = np.argsort(counts)[::-1]
+        unique_sorted = unique[sorted_indices][:50]
+        counts_sorted = counts[sorted_indices][:50]
+        # Convert unique values to strings for labels
+        labels = [f"({int(u[0])}, {int(u[1])}, {int(u[2])})" for u in unique_sorted]
+
+        # Plot
+        plt.figure(figsize=(12, 6))
+        plt.bar(range(len(counts_sorted)), counts_sorted)
+        plt.xlabel("Regions")
+        plt.ylabel("Number of samples")
+        plt.title("Number of Samples per Region (first 50 regions).")
+
+        # Set x-axis ticks and labels
+        plt.xticks(range(len(labels)), labels, rotation=90)
+
+        # Adjust layout to prevent label cutoff
+        plt.tight_layout()
+        saving_path = self.saving_path / "nb_samples_per_region.png"
+        plt.savefig(saving_path)
+
+        plt.show()
+
+    def distribution_per_component(self):
+        boxes = self._load_boxes()
+        boxes = boxes.T
+
+        # Count occurrences
+        pca_projection, explained_variance = self.loader._load_pca_projection(
+            explained_variance=True
+        )
+        n_bins = self.config.n_bins
+        box_indices = self.loader._load_bins()
+
+        # Convert box indices to RGB colors
+        # Normalize indices to the range [0, 1] for RGB
+        colors = box_indices / (n_bins + 1)
+        unique, counts = np.unique(boxes.values, axis=0, return_counts=True)
+
+        pass
 
 
 if __name__ == "__main__":
     args = parser_arguments().parse_args()
 
-    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-08-09_12:45:09_2139535_Europe_eco_small"
+    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-08-14_15:49:58_eco_big_variance"
     config = InitializationConfig(args)
-
+    # loader = Loader(config)
+    # limits_bins = loader._load_limits_bins()
+    # print(limits_bins)
     plot = PlotExtremes(config=config)
-    plot.plot_boxes_msc()
-    # plot.plot_map_component()
+    plot.plot_3D_pca()
+    plot.region()
+    # plot.map_component()
+    # plot.distribution_per_region()

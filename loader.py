@@ -29,7 +29,7 @@ class Loader:
             pca = pk.load(f)
         return pca
 
-    def _load_pca_projection(self):
+    def _load_pca_projection(self, explained_variance=False):
         """
         Load data from the specified filepath.
 
@@ -41,8 +41,14 @@ class Loader:
         pca_projection = data.pca.stack(location=("longitude", "latitude")).transpose(
             "location", "component", ...
         )
+        # Remove NaNs
+        condition = ~pca_projection.isnull().any(dim="component").compute()
+        pca_projection = pca_projection.where(condition, drop=True)
         printt("Projection loaded from {}".format(projection_path))
-        return pca_projection
+        if explained_variance:
+            return pca_projection, data.explained_variance
+        else:
+            return pca_projection
 
     def _load_limits_bins(self):
         """Saves the limits bins to a file."""
@@ -52,11 +58,13 @@ class Loader:
         return data
 
     def _load_bins(self):
-        bins_path = self.config.saving_path / "bins.zarr"
-        data = xr.open_zarr(boxes_path)
+        bins_path = self.config.saving_path / "boxes.zarr"
+        data = xr.open_zarr(bins_path)
         data = data.bins.stack(location=("longitude", "latitude")).transpose(
             "location", "component", ...
         )
+        condition = ~data.isnull().any(dim="component").compute()
+        data = data.where(condition, drop=True)
         return data
 
 
@@ -67,11 +75,11 @@ class Saver:
     ):
         self.config = config
 
-    def _save_pca_projection(self, pca_projection) -> None:
+    def _save_pca_projection(self, pca_projection, explained_variance_ratio_) -> None:
         """Saves the limits bins to a file."""
         # Split the components into separate DataArrays
         # Create a new coordinate for the 'component' dimension
-        component = np.arange(self.n_components)
+        component = np.arange(pca_projection.shape[1])
 
         # Create the new DataArray
         pca_projection = xr.DataArray(
@@ -90,7 +98,7 @@ class Saver:
 
         # Explained variance for each component
         explained_variance = xr.DataArray(
-            self.pca.explained_variance_ratio_,  # Example values for explained variance
+            explained_variance_ratio_,
             dims=["component"],
             coords={"component": component},
         )
