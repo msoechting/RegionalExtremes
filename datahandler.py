@@ -68,6 +68,7 @@ class DatasetHandler(ABC):
         Preprocess data based on the index.
         """
         self._dataset_specific_loading()
+        self.clean_dataset()
 
         # Select only a subset of the data if n_samples is specified
         if self.n_samples:
@@ -76,8 +77,10 @@ class DatasetHandler(ABC):
             printt(
                 f"Computation on the entire dataset. {self.data.sizes['latitude'] * self.data.sizes['longitude']} samples"
             )
-            self.standardize_dataset()
-
+            # Stack the dimensions
+            self.data = self.data.stack(location=("longitude", "latitude")).transpose(
+                "location", "time", ...
+            )
         self.compute_and_scale_the_msc()
         return self.data
 
@@ -86,7 +89,7 @@ class DatasetHandler(ABC):
         pass
 
     @abstractmethod
-    def standardize_dataset(self, *args, **kwargs):
+    def clean_dataset(self, *args, **kwargs):
         pass
 
     def randomly_select_data(self):
@@ -100,12 +103,37 @@ class DatasetHandler(ABC):
         )
 
     def _select_valid_locations(self):
-        selected_locations = []
-        while len(selected_locations) < self.n_samples:
-            lon, lat = self._get_random_coordinates()
-            if self._is_valid_location(lon, lat):
-                selected_locations.append((lon, lat))
-        return selected_locations
+        # Generate a large number of random coordinates
+        n_candidates = self.n_samples * 10  # Adjust this factor as needed
+        lons = da.random.uniform(self.lon_min, self.lon_max, n_candidates)
+        lats = da.random.uniform(self.lat_min, self.lat_max, n_candidates)
+
+        # Create a dask array of coordinate pairs
+        coordinates = da.stack([lons, lats], axis=1)
+
+        # Define a function to check if a location is valid
+        def is_valid_location(coord):
+            lon, lat = coord
+            return self._has_acceptable_nan_percentage(lon, lat)
+
+        # Apply the validation function to all coordinates in parallel
+        valid_mask = da.map_overlap(is_valid_location, coordinates, depth=0, dtype=bool)
+
+        # Compute the result
+        valid_coordinates = coordinates[valid_mask].compute()
+
+        # Select the required number of samples
+        selected_locations = valid_coordinates[: self.n_samples]
+
+        return selected_locations.tolist()
+
+    # def _select_valid_locations(self):
+    #     selected_locations = []
+    #     while len(selected_locations) < self.n_samples:
+    #         lon, lat = self._get_random_coordinates()
+    #         if self._has_acceptable_nan_percentage(lon, lat):
+    #             selected_locations.append((lon, lat))
+    #     return selected_locations
 
     def _get_random_coordinates(self):
         lon_index = random.randint(0, self.data.longitude.sizes["longitude"] - 1)
@@ -115,18 +143,19 @@ class DatasetHandler(ABC):
             self.data.latitude[lat_index].item(),
         )
 
-    def _is_valid_location(self, lon, lat):
-        return (
-            globe.is_land(lat, lon)
-            and abs(lat) <= NORTH_POLE_THRESHOLD
-            and self._is_in_europe(lon, lat)
-            and self._has_acceptable_nan_percentage(lon, lat)
-        )
+    # def _is_valid_location(self, lon, lat):
+    #    return (
+    #        # globe.is_land(lat, lon)
+    #        # and abs(lat) <= NORTH_POLE_THRESHOLD
+    #        # and self._is_in_europe(lon, lat)
+    #        self._has_acceptable_nan_percentage(lon, lat)
+    #    )
 
     def _has_acceptable_nan_percentage(self, lon, lat):
         data_location = self.data[self.variable_name].sel(longitude=lon, latitude=lat)
         nan_count = np.isnan(data_location).sum().values
         nan_percentage = nan_count / data_location.size
+        print(nan_percentage)
         return nan_percentage < MAX_NAN_PERCENTAGE
 
     def _update_data_with_selected_locations(self, selected_locations):
@@ -163,13 +192,12 @@ class DatasetHandler(ABC):
         Time resolution reduces the resolution of the MSC to decrease computation workload.
         Number of values = 366 / time_resolution.
         """
-        self._compute_msc()
 
+        self._compute_msc()
         if self.config.compute_variance:
             self._compute_and_combine_vsc()
 
         self._reduce_temporal_resolution()
-
         # Rechunck the data per time serie
         self.data = self.data.chunk(
             {"dayofyear": len(self.data.dayofyear), "location": 1}
@@ -178,7 +206,6 @@ class DatasetHandler(ABC):
         condition = ~self.data.isnull().any(dim="dayofyear").compute()
         self.data = self.data.where(condition, drop=True)
         printt("NaNs removed.")
-
         self._get_min_max_data()
         self._scale_data()
         self.data = self.data.chunk(
@@ -191,6 +218,7 @@ class DatasetHandler(ABC):
             self.data[self.variable_name]
             .groupby("time.dayofyear")
             .mean("time", skipna=True)
+            # .sel(dayofyear=slice(None, -1))
         )
 
     def _compute_and_combine_vsc(self):
@@ -198,6 +226,7 @@ class DatasetHandler(ABC):
             self.data[self.variable_name]
             .groupby("time.dayofyear")
             .var("time", skipna=True)
+            # .sel(dayofyear=slice(None, -1))
         )
         msc_vsc = xr.concat([self.data["msc"], self.data["vsc"]], dim="dayofyear")
         total_days = len(msc_vsc.dayofyear)
@@ -254,6 +283,38 @@ class DatasetHandler(ABC):
             - self.min_data.broadcast_like(self.data)
         ) + 1e-8
 
+    def _is_land(self, data):
+        # Create a land-sea mask
+        resolution = "50m"  # You can choose '10m', '50m', or '110m'
+        land = cfeature.NaturalEarthFeature(
+            "physical",
+            "land",
+            resolution,
+            edgecolor="face",
+            facecolor=cfeature.COLORS["land"],
+        )
+
+        # Create a grid of lat/lon points
+        lons, lats = np.meshgrid(ds.longitude, ds.latitude)
+
+        # Create a map projection
+        proj = ccrs.PlateCarree()
+
+        # Create the mask
+        mask = proj.coastlines(resolution=resolution).intersects_point(
+            lons.ravel(), lats.ravel()
+        )
+        mask = mask.reshape(lons.shape)
+
+        # Convert mask to xarray DataArray
+        mask = xr.DataArray(
+            mask, coords=[("latitude", ds.latitude), ("longitude", ds.longitude)]
+        )
+
+        # Apply the mask to filter out ocean locations
+        data = data.where(mask, drop=True)
+        return data
+
 
 class ClimaticDatasetHandler(DatasetHandler):
     def _dataset_specific_loading(self):
@@ -298,7 +359,7 @@ class ClimaticDatasetHandler(DatasetHandler):
         """Transform the longitude coordinates from between 0 and 360 to between -180 and 180."""
         return ((x + 180) % 360) - 180
 
-    def standardize_dataset(self):
+    def clean_dataset(self):
         """
         Apply climatic transformations using xarray.apply_ufunc.
         """
@@ -337,9 +398,9 @@ class ClimaticDatasetHandler(DatasetHandler):
         printt("Data filtred to Europe.")
 
         # Stack the dimensions
-        self.data = self.data.stack(location=("longitude", "latitude")).transpose(
-            "location", "time", ...
-        )
+        # self.data = self.data.stack(location=("longitude", "latitude")).transpose(
+        #     "location", "time", ...
+        # )
 
         printt(f"Climatic data loaded with dimensions: {self.data.sizes}")
 
@@ -398,7 +459,7 @@ class EcologicalDatasetHandler(DatasetHandler):
             f"Reduce the resolution from ({res_lat}, {res_lon}) to ({len(self.data.latitude)}, {len(self.data.longitude)})."
         )
 
-    def standardize_dataset(self):
+    def clean_dataset(self):
         """
         Standarize the ecological xarray. Remove irrelevant area, and reshape for the PCA.
         """
@@ -426,16 +487,11 @@ class EcologicalDatasetHandler(DatasetHandler):
             np.abs(self.data.latitude) >= SOUTH_POLE_THRESHOLD, drop=True
         )
 
-        # Select European data
+        # Select European data  # TODO extend to every region
         in_europe = self._is_in_europe(self.data.longitude, self.data.latitude)
         self.data = self.data.where(in_europe, drop=True)
         printt("Data filtred to Europe.")
 
-        # TODO extend to every region
-
-        # Stack the dimensions
-        self.data = self.data.stack(location=("longitude", "latitude")).transpose(
-            "location", "time", ...
-        )
+        self.data = self._is_land(self.data)
 
         printt(f"Ecological data loaded with dimensions: {self.data.sizes}")

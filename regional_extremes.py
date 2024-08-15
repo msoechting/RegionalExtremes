@@ -336,9 +336,10 @@ def main_define_limits(args):
 
 if __name__ == "__main__":
     args = parser_arguments().parse_args()
-    args.name = "eco_big_variance"
-    args.index = "EVI"
+    # args.name = "eco_5_components"
+    args.index = "pei_180"
     args.n_samples = 1000
+    args.n_components = 3
     args.compute_variance = True
 
     # args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-08-09_12:45:09_2139535_Europe_eco_small"

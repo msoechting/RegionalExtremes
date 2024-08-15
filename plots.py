@@ -8,7 +8,7 @@ from config import InitializationConfig
 from loader import Loader, Saver
 from regional_extremes import parser_arguments
 from utils import printt
-from datahandler import EcologicalDatasetHandler, ClimaticDatasetHandler
+from datahandler import create_handler
 
 
 class PlotExtremes(InitializationConfig):
@@ -43,6 +43,7 @@ class PlotExtremes(InitializationConfig):
         pca_projection, explained_variance = self.loader._load_pca_projection(
             explained_variance=True
         )
+        pca_projection = pca_projection.unstack("location")
         # Normalize the explained variance
         normalized_variance = (
             explained_variance.explained_variance
@@ -53,12 +54,18 @@ class PlotExtremes(InitializationConfig):
         def _normalization(index, normalization):
             band = pca_projection.isel(component=index).values
 
-            normalized_band = (band - np.nanmin(band)) / (
-                np.nanmax(band) - np.nanmin(band)
+            # normalized_band = (band - np.nanmin(band)) / (
+            #     np.nanmax(band) - np.nanmin(band)
+            # )
+            ## We normalize with the 5% and 95% quantiles due to outliers.
+            normalized_band = (band - np.quantile(band, q=0.05)) / (
+                np.quantile(band, q=0.95) - np.quantile(band, q=0.05)
             )
-            # We normalize with the 5% and 95% quantiles due to outliers.
-            # normalized_band = (band - np.quantile(band, q=0.05)) / (
-            #     np.quantile(band, q=0.95) - np.quantile(band, q=0.05)
+            # print(
+            #     np.nanmin(band),
+            #     np.nanmax(band),
+            #     np.quantile(band, q=0.05),
+            #     np.quantile(band, q=0.95),
             # )
             # # Normalization of the color by feature importance
             if normalization:
@@ -98,10 +105,10 @@ class PlotExtremes(InitializationConfig):
 
         # Plot the RGB data
         img_extent = (
-            self.pca_projection.longitude.min(),
-            self.pca_projection.longitude.max(),
-            self.pca_projection.latitude.min(),
-            self.pca_projection.latitude.max(),
+            pca_projection.longitude.min(),
+            pca_projection.longitude.max(),
+            pca_projection.latitude.min(),
+            pca_projection.latitude.max(),
         )
 
         ax.set_extent(img_extent, crs=projection)
@@ -123,14 +130,16 @@ class PlotExtremes(InitializationConfig):
     def region(self, lon=None, lat=None):
         """plot the samples of a single region"""
         boxes = self.loader._load_bins().T
-
         # Select randomly a first location
         if lon is None and lat is None:
-            lon = random.choice(boxes.longitude).item()
-            lat = random.choice(boxes.latitude).item()
+            lon = random.choice(boxes.longitude.values).item()
+            lat = random.choice(boxes.latitude.values).item()
         # Get the boxe indices of the location
-        indices = boxes.sel(longitude=lon, latitude=lat).values
 
+        # indices = boxes.where(
+        #     (boxes.longitude == lon) & (boxes.latitude == lat), drop=True
+        # ).values  #
+        indices = boxes.sel(longitude=lon, latitude=lat).values
         # indices = np.array([19, 16, 13])
         # Create a boolean mask for the subset
         mask = np.all(boxes.values == indices[:, np.newaxis], axis=0)
@@ -189,8 +198,7 @@ class PlotExtremes(InitializationConfig):
                 masked_lons_lats = random.choices(masked_lons_lats, k=10)
                 printt(f"Selected locations: {masked_lons_lats}")
 
-            # TODO Careful Dataset dependent
-            dataloader = EcologicalDatasetHandler(
+            dataloader = create_handler(
                 config=config, n_samples=None  # args.n_samples,  # all the dataset
             )
             data = (
@@ -310,8 +318,8 @@ class PlotExtremes(InitializationConfig):
         return
 
     def distribution_per_region(self):
-        boxes = self._load_boxes()
-        boxes = boxes.T
+        boxes = self.loader._load_bins()
+        boxes = boxes
 
         # Count occurrences
         unique, counts = np.unique(boxes.values, axis=0, return_counts=True)
@@ -345,9 +353,7 @@ class PlotExtremes(InitializationConfig):
         boxes = boxes.T
 
         # Count occurrences
-        pca_projection, explained_variance = self.loader._load_pca_projection(
-            explained_variance=True
-        )
+        pca_projection = self.loader._load_pca_projection()
         n_bins = self.config.n_bins
         box_indices = self.loader._load_bins()
 
@@ -362,13 +368,12 @@ class PlotExtremes(InitializationConfig):
 if __name__ == "__main__":
     args = parser_arguments().parse_args()
 
-    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-08-14_15:49:58_eco_big_variance"
+    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-08-15_11:50:45"
     config = InitializationConfig(args)
     # loader = Loader(config)
+    # print(loader._load_pca_matrix().explained_variance_ratio_)
     # limits_bins = loader._load_limits_bins()
     # print(limits_bins)
     plot = PlotExtremes(config=config)
-    plot.plot_3D_pca()
     plot.region()
-    # plot.map_component()
     # plot.distribution_per_region()
