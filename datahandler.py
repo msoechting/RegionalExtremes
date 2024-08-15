@@ -10,6 +10,7 @@ import pandas as pd
 from pathlib import Path
 from typing import Union
 from dask.array.core import map_blocks
+import regionmask
 import time
 import sys
 import os
@@ -28,8 +29,6 @@ ECOLOGICAL_FILEPATH = (
     lambda index: f"/Net/Groups/BGI/work_1/scratch/fluxcom/upscaling_inputs/MODIS_VI_perRegion061/{index}/Groups_{index}gapfilled_QCdyn.zarr"
 )
 VARIABLE_NAME = lambda index: f"{index}gapfilled_QCdyn"
-CLIMATIC_INDICES = ["pei_30", "pei_90", "pei_180"]
-ECOLOGICAL_INDICES = ["EVI", "NDVI", "kNDVI"]
 
 
 @staticmethod
@@ -102,38 +101,47 @@ class DatasetHandler(ABC):
             f"Randomly selected {self.data.sizes['location']} samples for training in Europe."
         )
 
-    def _select_valid_locations(self):
-        # Generate a large number of random coordinates
-        n_candidates = self.n_samples * 10  # Adjust this factor as needed
-        lons = da.random.uniform(self.lon_min, self.lon_max, n_candidates)
-        lats = da.random.uniform(self.lat_min, self.lat_max, n_candidates)
-
-        # Create a dask array of coordinate pairs
-        coordinates = da.stack([lons, lats], axis=1)
-
-        # Define a function to check if a location is valid
-        def is_valid_location(coord):
-            lon, lat = coord
-            return self._has_acceptable_nan_percentage(lon, lat)
-
-        # Apply the validation function to all coordinates in parallel
-        valid_mask = da.map_overlap(is_valid_location, coordinates, depth=0, dtype=bool)
-
-        # Compute the result
-        valid_coordinates = coordinates[valid_mask].compute()
-
-        # Select the required number of samples
-        selected_locations = valid_coordinates[: self.n_samples]
-
-        return selected_locations.tolist()
-
     # def _select_valid_locations(self):
-    #     selected_locations = []
-    #     while len(selected_locations) < self.n_samples:
-    #         lon, lat = self._get_random_coordinates()
-    #         if self._has_acceptable_nan_percentage(lon, lat):
-    #             selected_locations.append((lon, lat))
-    #     return selected_locations
+    #    # Generate a large number of random coordinates
+    #    n_candidates = self.n_samples * 10  # Adjust this factor as needed
+    #    lons = da.random.uniform(
+    #        min(self.data.longitude), max(self.data.longitude), n_candidates
+    #    )
+    #    lats = da.random.uniform(
+    #        min(self.data.latitude), max(self.data.latitude), n_candidates
+    #    )
+    #
+    #    # Create a dask array of coordinate pairs
+    #    coordinates = da.stack([lons, lats], axis=1)
+    #
+    #    # Define a function to check if a location is valid
+    #    def is_valid_location(coord):
+    #        print(coord.shape)
+    #        print(coord)
+    #        lon, lat = coord
+    #        return self._has_acceptable_nan_percentage(lon, lat)
+    #
+    #    # Apply the function across the blocks
+    #    valid_mask = coordinates.map_blocks(is_valid_location, dtype=bool, drop_axis=1)
+    #
+    #    # Compute and print the result
+    #    print(valid_mask.compute())
+    #
+    #    # Compute the result
+    #    # valid_coordinates = coordinates.where  # coordinates[valid_mask].compute()
+    #    # print(valid_coordinates.values)
+    #    # Select the required number of samples
+    #    # selected_locations = valid_coordinates[: self.n_samples]
+    #    # print(selected_location.values)
+    #    return selected_locations
+
+    def _select_valid_locations(self):
+        selected_locations = []
+        while len(selected_locations) < self.n_samples:
+            lon, lat = self._get_random_coordinates()
+            if self._has_acceptable_nan_percentage(lon, lat):
+                selected_locations.append((lon, lat))
+        return selected_location
 
     def _get_random_coordinates(self):
         lon_index = random.randint(0, self.data.longitude.sizes["longitude"] - 1)
@@ -155,7 +163,6 @@ class DatasetHandler(ABC):
         data_location = self.data[self.variable_name].sel(longitude=lon, latitude=lat)
         nan_count = np.isnan(data_location).sum().values
         nan_percentage = nan_count / data_location.size
-        print(nan_percentage)
         return nan_percentage < MAX_NAN_PERCENTAGE
 
     def _update_data_with_selected_locations(self, selected_locations):
@@ -283,33 +290,36 @@ class DatasetHandler(ABC):
             - self.min_data.broadcast_like(self.data)
         ) + 1e-8
 
+    def _spatial_filtering(self, data):
+        # Filter data from the polar regions
+        data = self.data.where(
+            np.abs(self.data.latitude) <= NORTH_POLE_THRESHOLD, drop=True
+        )
+        data = self.data.where(
+            np.abs(self.data.latitude) >= SOUTH_POLE_THRESHOLD, drop=True
+        )
+
+        # Filter dataset to select Europe
+        # Select European data
+        in_europe = self._is_in_europe(data.longitude, data.latitude)
+        data = data.where(in_europe, drop=True)
+        printt("Data filtred to Europe.")
+
+        data = self._is_land(data)
+        printt("Data filtred to land.")
+        return data
+
     def _is_land(self, data):
-        # Create a land-sea mask
-        resolution = "50m"  # You can choose '10m', '50m', or '110m'
-        land = cfeature.NaturalEarthFeature(
-            "physical",
-            "land",
-            resolution,
-            edgecolor="face",
-            facecolor=cfeature.COLORS["land"],
-        )
+        # Create a land-sea mask using regionmask
+        land = regionmask.defined_regions.natural_earth_v5_0_0.land_110
+        mask = land.mask(data.longitude, data.latitude)
 
-        # Create a grid of lat/lon points
-        lons, lats = np.meshgrid(ds.longitude, ds.latitude)
-
-        # Create a map projection
-        proj = ccrs.PlateCarree()
-
-        # Create the mask
-        mask = proj.coastlines(resolution=resolution).intersects_point(
-            lons.ravel(), lats.ravel()
-        )
-        mask = mask.reshape(lons.shape)
-
-        # Convert mask to xarray DataArray
-        mask = xr.DataArray(
-            mask, coords=[("latitude", ds.latitude), ("longitude", ds.longitude)]
-        )
+        # The mask might be reversed (True for ocean, False for land)
+        # So we'll invert it if necessary
+        if mask.isel(
+            latitude=0, longitude=0
+        ).item():  # Check if (0,0) is masked (likely ocean)
+            mask = ~mask
 
         # Apply the mask to filter out ocean locations
         data = data.where(mask, drop=True)
@@ -376,31 +386,14 @@ class ClimaticDatasetHandler(DatasetHandler):
         # Ensure longitude values are within the expected range
         assert (
             (self.data.longitude >= -180) & (self.data.longitude <= 180)
-        ).all(), "Longitude values should be in the range 0 to 360"
+        ).all(), "Longitude values should be in the range -180 to 180"
 
         # Remove the years before 1970 due to quality
         self.data = self.data.sel(
             time=slice(datetime.date(1970, 1, 1), datetime.date(2022, 12, 31))
         )
 
-        # Filter data from the polar regions
-        self.data = self.data.where(
-            np.abs(self.data.latitude) <= NORTH_POLE_THRESHOLD, drop=True
-        )
-        self.data = self.data.where(
-            np.abs(self.data.latitude) >= SOUTH_POLE_THRESHOLD, drop=True
-        )
-
-        # Filter dataset to select Europe
-        # Select European data
-        in_europe = self._is_in_europe(self.data.longitude, self.data.latitude)
-        self.data = self.data.where(in_europe, drop=True)
-        printt("Data filtred to Europe.")
-
-        # Stack the dimensions
-        # self.data = self.data.stack(location=("longitude", "latitude")).transpose(
-        #     "location", "time", ...
-        # )
+        self.data = self._spatial_filtering(self.data)
 
         printt(f"Climatic data loaded with dimensions: {self.data.sizes}")
 
@@ -474,24 +467,11 @@ class EcologicalDatasetHandler(DatasetHandler):
             dim in self.data.sizes for dim in ("time", "latitude", "longitude")
         ), "Dimension missing"
 
-        # Filter data to the drought indices range.
+        # Temporal filtering.
         self.data = self.data.sel(
             time=slice(datetime.date(2000, 1, 1), datetime.date(2022, 12, 31))
         )
 
-        # Filter data from the polar regions
-        self.data = self.data.where(
-            np.abs(self.data.latitude) <= NORTH_POLE_THRESHOLD, drop=True
-        )
-        self.data = self.data.where(
-            np.abs(self.data.latitude) >= SOUTH_POLE_THRESHOLD, drop=True
-        )
-
-        # Select European data  # TODO extend to every region
-        in_europe = self._is_in_europe(self.data.longitude, self.data.latitude)
-        self.data = self.data.where(in_europe, drop=True)
-        printt("Data filtred to Europe.")
-
-        self.data = self._is_land(self.data)
+        self.data = self._spatial_filtering(self.data)
 
         printt(f"Ecological data loaded with dimensions: {self.data.sizes}")

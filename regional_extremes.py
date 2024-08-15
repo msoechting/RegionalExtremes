@@ -336,9 +336,9 @@ def main_define_limits(args):
 
 if __name__ == "__main__":
     args = parser_arguments().parse_args()
-    # args.name = "eco_5_components"
-    args.index = "pei_180"
-    args.n_samples = 1000
+    args.name = "eco_5_components"
+    args.index = "EVI"
+    args.n_samples = 10
     args.n_components = 3
     args.compute_variance = True
 

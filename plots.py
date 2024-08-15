@@ -134,13 +134,10 @@ class PlotExtremes(InitializationConfig):
         if lon is None and lat is None:
             lon = random.choice(boxes.longitude.values).item()
             lat = random.choice(boxes.latitude.values).item()
-        # Get the boxe indices of the location
 
-        # indices = boxes.where(
-        #     (boxes.longitude == lon) & (boxes.latitude == lat), drop=True
-        # ).values  #
-        indices = boxes.sel(longitude=lon, latitude=lat).values
-        # indices = np.array([19, 16, 13])
+        # Get the boxe indices of the location
+        # indices = boxes.sel(longitude=lon, latitude=lat).values
+        indices = np.array([5, 19, 16])
         # Create a boolean mask for the subset
         mask = np.all(boxes.values == indices[:, np.newaxis], axis=0)
 
@@ -183,7 +180,6 @@ class PlotExtremes(InitializationConfig):
 
             # Add a title
             plt.title(f"Location of samples of the region {indices}.")
-            plt.show()
 
             # Save the figure
             map_saving_path = (
@@ -192,6 +188,8 @@ class PlotExtremes(InitializationConfig):
             plt.savefig(map_saving_path)
             plt.close()
             printt("Plot saved")
+
+            plt.show()
 
         def time_series_single_region(masked_lons_lats):
             if len(masked_lons_lats) > 10:
@@ -230,9 +228,10 @@ class PlotExtremes(InitializationConfig):
                 plt.tight_layout()
 
                 # Show the plot
-                plt.show()
                 saving_path = self.saving_path / f"ts_single_region_{indices}.png"
                 plt.savefig(saving_path)
+
+                plt.show()
 
             def msc_vsc(data):
                 msc = data.groupby("time.dayofyear").mean("time", skipna=True)
@@ -269,10 +268,10 @@ class PlotExtremes(InitializationConfig):
                 plt.tight_layout()
                 plt.subplots_adjust(hspace=0.3)
 
-                plt.show()
-
                 saving_path = self.saving_path / f"msc_vsc_single_region_{indices}.png"
                 plt.savefig(saving_path)
+
+                plt.show()
 
             time_series(data)
             msc_vsc(data)
@@ -368,7 +367,7 @@ class PlotExtremes(InitializationConfig):
 if __name__ == "__main__":
     args = parser_arguments().parse_args()
 
-    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-08-15_11:50:45"
+    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-08-15_15:00:00"
     config = InitializationConfig(args)
     # loader = Loader(config)
     # print(loader._load_pca_matrix().explained_variance_ratio_)
@@ -376,4 +375,4 @@ if __name__ == "__main__":
     # print(limits_bins)
     plot = PlotExtremes(config=config)
     plot.region()
-    # plot.distribution_per_region()
+    plot.distribution_per_region()
