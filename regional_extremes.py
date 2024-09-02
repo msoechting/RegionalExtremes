@@ -203,6 +203,7 @@ class RegionalExtremes:  # (InitializationConfig):
 
     def _validate_scaled_data(self, scaled_data: np.ndarray) -> None:
         """Validates the scaled data to ensure it matches the expected shape."""
+        print(scaled_data)
         if self.config.compute_variance:
             expected_shape = round(366 / self.config.time_resolution) * 2 + 1
         else:
@@ -289,16 +290,7 @@ def main_train_pca(args):
     dataset_processor = create_handler(
         config=config, n_samples=args.n_samples  # args.n_samples,  # all the dataset
     )
-    # if args.index in ECOLOGICAL_INDICES:
-    #     dataset_processor = EcologicalDatasetHandler(
-    #         config=config,
-    #         n_samples=args.n_samples,
-    #     )
-    # elif args.index in CLIMATIC_INDICES:
-    #     dataset_processor = ClimaticDatasetHandler(
-    #         config=config,
-    #         n_samples=args.n_samples,
-    #     )
+
     data_subset = dataset_processor.preprocess_data()
     extremes_processor = RegionalExtremes(
         config=config,
@@ -317,12 +309,10 @@ def main_train_pca(args):
 
 
 def main_define_limits(args):
-    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-08-07_16:06:37_eco_small"
+    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-08-30_15:04:11_eco_final"
     config = InitializationConfig(args)
 
-    dataset_processor = DatasetHandler(
-        config=config, n_samples=None  # args.n_samples,  # all the dataset
-    ).create_handler()
+    dataset_processor = create_handler(config=config, n_samples=None)
     data = dataset_processor.preprocess_data()
 
     extremes_processor = RegionalExtremes(
@@ -336,11 +326,11 @@ def main_define_limits(args):
 
 if __name__ == "__main__":
     args = parser_arguments().parse_args()
-    args.name = "eco_5_components"
+    args.name = "eco_final"
     args.index = "EVI"
-    args.n_samples = 10
+    args.n_samples = 1000
     args.n_components = 3
-    args.compute_variance = True
+    args.compute_variance = False
 
     # args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-08-09_12:45:09_2139535_Europe_eco_small"
     # config = InitializationConfig(args)

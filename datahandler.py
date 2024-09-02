@@ -7,6 +7,7 @@ import json
 import random
 import datetime
 import pandas as pd
+import pyproj
 from pathlib import Path
 from typing import Union
 from dask.array.core import map_blocks
@@ -23,7 +24,7 @@ from utils import printt
 
 NORTH_POLE_THRESHOLD = 66.5
 SOUTH_POLE_THRESHOLD = -66.5
-MAX_NAN_PERCENTAGE = 0.3
+MAX_NAN_PERCENTAGE = 0.7
 CLIMATIC_FILEPATH = "/Net/Groups/BGI/scratch/mweynants/DeepExtremes/v3/PEICube.zarr"
 ECOLOGICAL_FILEPATH = (
     lambda index: f"/Net/Groups/BGI/work_1/scratch/fluxcom/upscaling_inputs/MODIS_VI_perRegion061/{index}/Groups_{index}gapfilled_QCdyn.zarr"
@@ -32,20 +33,18 @@ VARIABLE_NAME = lambda index: f"{index}gapfilled_QCdyn"
 
 
 @staticmethod
-def create_handler(config, n_samples):
+def create_handler(config, n_samples, scale=True):
     if config.index in ECOLOGICAL_INDICES:
-        return EcologicalDatasetHandler(config=config, n_samples=n_samples)
+        return EcologicalDatasetHandler(config=config, n_samples=n_samples, scale=scale)
     elif config.index in CLIMATIC_INDICES:
-        return ClimaticDatasetHandler(config=config, n_samples=n_samples)
+        return ClimaticDatasetHandler(config=config, n_samples=n_samples, scale=scale)
     else:
         raise ValueError("Invalid index")
 
 
 class DatasetHandler(ABC):
     def __init__(
-        self,
-        config: InitializationConfig,
-        n_samples: Union[int, None],
+        self, config: InitializationConfig, n_samples: Union[int, None], scale: bool
     ):
         """
         Initialize DatasetHandler.
@@ -56,6 +55,7 @@ class DatasetHandler(ABC):
         """
         self.config = config
         self.n_samples = n_samples
+        self.scale = scale
 
         self.max_data = None
         self.min_data = None
@@ -67,20 +67,23 @@ class DatasetHandler(ABC):
         Preprocess data based on the index.
         """
         self._dataset_specific_loading()
-        self.clean_dataset()
+        self.filter_dataset()
+        # Stack the dimensions
+        self.data = self.data.stack(location=("longitude", "latitude"))
 
         # Select only a subset of the data if n_samples is specified
         if self.n_samples:
-            self.randomly_select_data()
+            self.randomly_select_n_samples()
         else:
+            self.data = self.data[self.variable_name]
             printt(
-                f"Computation on the entire dataset. {self.data.sizes['latitude'] * self.data.sizes['longitude']} samples"
+                f"Computation on the entire dataset. {self.data.sizes['location']} samples"
             )
-            # Stack the dimensions
-            self.data = self.data.stack(location=("longitude", "latitude")).transpose(
-                "location", "time", ...
-            )
-        self.compute_and_scale_the_msc()
+
+        self.compute_variable()
+        if self.scale:
+            self._scale_data()
+        self.data = self.data.transpose("location", "dayofyear", ...)
         return self.data
 
     @abstractmethod
@@ -88,96 +91,75 @@ class DatasetHandler(ABC):
         pass
 
     @abstractmethod
-    def clean_dataset(self, *args, **kwargs):
+    def filter_dataset(self, *args, **kwargs):
         pass
 
-    def randomly_select_data(self):
+    def _spatial_filtering(self, data):
+        # Filter data from the polar regions
+        data = self.data.where(
+            np.abs(self.data.latitude) <= NORTH_POLE_THRESHOLD, drop=True
+        )
+        data = self.data.where(
+            np.abs(self.data.latitude) >= SOUTH_POLE_THRESHOLD, drop=True
+        )
+
+        # Filter dataset to select Europe
+        # Select European data
+        in_europe = self._is_in_europe(data.longitude, data.latitude)
+        data = data.where(in_europe, drop=True)
+        printt("Data filtred to Europe.")
+
+        data = self._is_land(data)
+        printt("Data filtred to land.")
+        return data
+
+    def _is_land(self, data):
+        # Create a land mask
+        land = regionmask.defined_regions.natural_earth_v5_0_0.land_110
+        mask = land.mask(data.longitude, data.latitude).astype(bool)
+
+        # Mask the ocean
+        mask = ~mask
+
+        # Apply the mask to filter out ocean locations
+        data = data.where(mask, drop=True)
+        return data
+
+    def randomly_select_n_samples(self, factor=5):
         """
         Randomly select a subset of n_samples of data.
         """
-        selected_locations = self._select_valid_locations()
-        self._update_data_with_selected_locations(selected_locations)
-        printt(
-            f"Randomly selected {self.data.sizes['location']} samples for training in Europe."
+        # Generate a large number of random coordinates
+        n_candidates = self.n_samples * factor
+        lons = np.random.choice(self.data.longitude, size=n_candidates, replace=True)
+        lats = np.random.choice(self.data.latitude, size=n_candidates, replace=True)
+
+        selected_locations = list(zip(lons, lats))
+        self.data = self.data.chunk({"time": len(self.data.time), "location": 1})
+
+        # Select the values at the specified coordinates
+        selected_data = self.data[self.variable_name].sel(location=selected_locations)
+        # Remove NaNs
+        condition = ~selected_data.isnull().any(dim="time").compute()  #
+        selected_data = selected_data.where(condition, drop=True)
+
+        # Select randomly n_samples samples in selected_data
+        self.data = selected_data.isel(
+            location=np.random.choice(
+                selected_data.location.size,
+                size=min(self.n_samples, selected_data.location.size),
+                replace=False,
+            )
         )
+        if self.data.sizes["location"] != self.n_samples:
+            raise (
+                "Number of samples != n_samples. The number of samples without NaNs is likely too low, increase the factor of n_candidates."
+            )
+        printt(f"Randomly selected {self.data.sizes['location']} samples for training.")
 
-    # def _select_valid_locations(self):
-    #    # Generate a large number of random coordinates
-    #    n_candidates = self.n_samples * 10  # Adjust this factor as needed
-    #    lons = da.random.uniform(
-    #        min(self.data.longitude), max(self.data.longitude), n_candidates
-    #    )
-    #    lats = da.random.uniform(
-    #        min(self.data.latitude), max(self.data.latitude), n_candidates
-    #    )
-    #
-    #    # Create a dask array of coordinate pairs
-    #    coordinates = da.stack([lons, lats], axis=1)
-    #
-    #    # Define a function to check if a location is valid
-    #    def is_valid_location(coord):
-    #        print(coord.shape)
-    #        print(coord)
-    #        lon, lat = coord
-    #        return self._has_acceptable_nan_percentage(lon, lat)
-    #
-    #    # Apply the function across the blocks
-    #    valid_mask = coordinates.map_blocks(is_valid_location, dtype=bool, drop_axis=1)
-    #
-    #    # Compute and print the result
-    #    print(valid_mask.compute())
-    #
-    #    # Compute the result
-    #    # valid_coordinates = coordinates.where  # coordinates[valid_mask].compute()
-    #    # print(valid_coordinates.values)
-    #    # Select the required number of samples
-    #    # selected_locations = valid_coordinates[: self.n_samples]
-    #    # print(selected_location.values)
-    #    return selected_locations
-
-    def _select_valid_locations(self):
-        selected_locations = []
-        while len(selected_locations) < self.n_samples:
-            lon, lat = self._get_random_coordinates()
-            if self._has_acceptable_nan_percentage(lon, lat):
-                selected_locations.append((lon, lat))
-        return selected_location
-
-    def _get_random_coordinates(self):
-        lon_index = random.randint(0, self.data.longitude.sizes["longitude"] - 1)
-        lat_index = random.randint(0, self.data.latitude.sizes["latitude"] - 1)
-        return (
-            self.data.longitude[lon_index].item(),
-            self.data.latitude[lat_index].item(),
-        )
-
-    # def _is_valid_location(self, lon, lat):
-    #    return (
-    #        # globe.is_land(lat, lon)
-    #        # and abs(lat) <= NORTH_POLE_THRESHOLD
-    #        # and self._is_in_europe(lon, lat)
-    #        self._has_acceptable_nan_percentage(lon, lat)
-    #    )
-
-    def _has_acceptable_nan_percentage(self, lon, lat):
+    def _is_not_nan(self, lon, lat):
         data_location = self.data[self.variable_name].sel(longitude=lon, latitude=lat)
-        nan_count = np.isnan(data_location).sum().values
-        nan_percentage = nan_count / data_location.size
-        return nan_percentage < MAX_NAN_PERCENTAGE
-
-    def _update_data_with_selected_locations(self, selected_locations):
-
-        lons, lats = zip(*selected_locations)
-        # Ensure that each lons and lats are unique
-        lons, lats = list(set(lons)), list(set(lats))
-
-        # Select data using the MultiIndex
-        self.data = (
-            self.data.sel(longitude=lons, latitude=lats)
-            .stack(location=("longitude", "latitude"))
-            .sel(location=selected_locations)
-            .transpose("location", "time", ...)
-        )
+        return ~np.isnan(data_location).any().values
 
     def _is_in_europe(self, lon, lat):
         """
@@ -193,53 +175,57 @@ class DatasetHandler(ABC):
         )
         return in_europe
 
-    def compute_and_scale_the_msc(self):
+    def compute_variable(self, scale=True):
         """
-        Compute the Mean Seasonal Cycle (MSC) of n samples and scale it between 0 and 1.
+        Compute the Mean Seasonal Cycle (MSC) and optionally the Variance Seasonal Cycle (VSC)
+        of n samples and scale it between 0 and 1.
+
         Time resolution reduces the resolution of the MSC to decrease computation workload.
         Number of values = 366 / time_resolution.
         """
+        msc = self._compute_msc()
+        printt("MSC computed.")
 
-        self._compute_msc()
         if self.config.compute_variance:
-            self._compute_and_combine_vsc()
+            vsc = self._compute_vsc()
+            self.data = self._combine_msc_vsc(msc, vsc)
+            printt("Variance is computed.")
+        else:
+            self.data = msc
 
         self._reduce_temporal_resolution()
-        # Rechunck the data per time serie
+        self._rechunk_data()
+        if not self.n_samples:
+            self._remove_nans()
+
+    def _compute_msc(self):
+        return (
+            self.data.groupby("time.dayofyear")
+            .mean("time", skipna=True)
+            .isel(dayofyear=slice(1, 365))
+        )
+
+    def _compute_vsc(self):
+        return (
+            self.data.groupby("time.dayofyear")
+            .var("time", skipna=True)
+            .isel(dayofyear=slice(1, 365))
+        )
+
+    def _combine_msc_vsc(self, msc, vsc):
+        msc_vsc = xr.concat([msc, vsc], dim="dayofyear")
+        total_days = len(msc_vsc.dayofyear)
+        return msc_vsc.assign_coords(dayofyear=("dayofyear", range(total_days)))
+
+    def _rechunk_data(self):
         self.data = self.data.chunk(
             {"dayofyear": len(self.data.dayofyear), "location": 1}
         )
-        # Remove NaNs
+
+    def _remove_nans(self):
         condition = ~self.data.isnull().any(dim="dayofyear").compute()
         self.data = self.data.where(condition, drop=True)
         printt("NaNs removed.")
-        self._get_min_max_data()
-        self._scale_data()
-        self.data = self.data.chunk(
-            {"dayofyear": len(self.data.dayofyear), "location": 1}
-        )
-        printt("Data are scaled between 0 and 1.")
-
-    def _compute_msc(self):
-        self.data["msc"] = (
-            self.data[self.variable_name]
-            .groupby("time.dayofyear")
-            .mean("time", skipna=True)
-            # .sel(dayofyear=slice(None, -1))
-        )
-
-    def _compute_and_combine_vsc(self):
-        self.data["vsc"] = (
-            self.data[self.variable_name]
-            .groupby("time.dayofyear")
-            .var("time", skipna=True)
-            # .sel(dayofyear=slice(None, -1))
-        )
-        msc_vsc = xr.concat([self.data["msc"], self.data["vsc"]], dim="dayofyear")
-        total_days = len(msc_vsc.dayofyear)
-        msc_vsc = msc_vsc.assign_coords(dayofyear=("dayofyear", range(total_days)))
-        self.data = msc_vsc
-        printt("Variance is computed")
 
     def _reduce_temporal_resolution(self):
         self.data = self.data.isel(
@@ -259,7 +245,6 @@ class DatasetHandler(ABC):
         ) is None, "the min and max of the data are already defined."
         assert self.config.path_load_experiment is None, "A model is already loaded."
 
-        # self.data = self.data.chunk({"dayofyear": 1, "location": 12000})
         self.max_data = self.data.max(dim=["location"])
         self.min_data = self.data.min(dim=["location"])
         # Save min_data and max_data
@@ -285,45 +270,12 @@ class DatasetHandler(ABC):
         self.max_data = min_max_data.max_data
 
     def _scale_data(self):
-        self.data = (self.min_data.broadcast_like(self.data) - self.data) / (
-            self.max_data.broadcast_like(self.data)
-            - self.min_data.broadcast_like(self.data)
-        ) + 1e-8
-
-    def _spatial_filtering(self, data):
-        # Filter data from the polar regions
-        data = self.data.where(
-            np.abs(self.data.latitude) <= NORTH_POLE_THRESHOLD, drop=True
+        self._get_min_max_data()
+        self.data = (self.min_data - self.data) / (self.max_data - self.min_data) + 1e-8
+        self.data = self.data.chunk(
+            {"dayofyear": len(self.data.dayofyear), "location": 1}
         )
-        data = self.data.where(
-            np.abs(self.data.latitude) >= SOUTH_POLE_THRESHOLD, drop=True
-        )
-
-        # Filter dataset to select Europe
-        # Select European data
-        in_europe = self._is_in_europe(data.longitude, data.latitude)
-        data = data.where(in_europe, drop=True)
-        printt("Data filtred to Europe.")
-
-        data = self._is_land(data)
-        printt("Data filtred to land.")
-        return data
-
-    def _is_land(self, data):
-        # Create a land-sea mask using regionmask
-        land = regionmask.defined_regions.natural_earth_v5_0_0.land_110
-        mask = land.mask(data.longitude, data.latitude)
-
-        # The mask might be reversed (True for ocean, False for land)
-        # So we'll invert it if necessary
-        if mask.isel(
-            latitude=0, longitude=0
-        ).item():  # Check if (0,0) is masked (likely ocean)
-            mask = ~mask
-
-        # Apply the mask to filter out ocean locations
-        data = data.where(mask, drop=True)
-        return data
+        printt("Data are scaled between 0 and 1.")
 
 
 class ClimaticDatasetHandler(DatasetHandler):
@@ -369,7 +321,7 @@ class ClimaticDatasetHandler(DatasetHandler):
         """Transform the longitude coordinates from between 0 and 360 to between -180 and 180."""
         return ((x + 180) % 360) - 180
 
-    def clean_dataset(self):
+    def filter_dataset(self):
         """
         Apply climatic transformations using xarray.apply_ufunc.
         """
@@ -452,7 +404,7 @@ class EcologicalDatasetHandler(DatasetHandler):
             f"Reduce the resolution from ({res_lat}, {res_lon}) to ({len(self.data.latitude)}, {len(self.data.longitude)})."
         )
 
-    def clean_dataset(self):
+    def filter_dataset(self):
         """
         Standarize the ecological xarray. Remove irrelevant area, and reshape for the PCA.
         """
