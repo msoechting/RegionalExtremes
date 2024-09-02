@@ -301,6 +301,14 @@ class PlotExtremes(InitializationConfig):
         masked_lons = boxes.longitude.values[mask]
         masked_lats = boxes.latitude.values[mask]
         masked_lons_lats = list(zip(masked_lons, masked_lats))
+        locations = self.find_bins_origin()
+        masked_lons_lats = list(
+            zip(locations.longitude.values, locations.latitude.values)
+        )
+        mask = locations
+
+        indices = "center"
+
         printt(f"Number of samples in the region {indices}: {len(masked_lons_lats)}.")
         if len(masked_lons_lats) == 0:
             printt(f"No samples in the region {indices}.")
@@ -365,7 +373,7 @@ class PlotExtremes(InitializationConfig):
 
         def time_series_single_region(masked_lons_lats):
             if len(masked_lons_lats) > 10:
-                masked_lons_lats = random.choices(masked_lons_lats, k=10)
+                masked_lons_lats = random.choices(masked_lons_lats, k=36)
                 printt(f"Selected locations: {masked_lons_lats}")
 
             dataloader = create_handler(
@@ -512,9 +520,24 @@ class PlotExtremes(InitializationConfig):
 
             # plt.show()
 
-        plot_3D_pca(masked_lons_lats)
+        # plot_3D_pca(masked_lons_lats)
         map_single_region(mask)
         time_series_single_region(masked_lons_lats)
+
+    def find_bins_origin(self):
+        pca_projection, explained_variance = self.loader._load_pca_projection(
+            explained_variance=True
+        )
+        lower_bound = -0.2
+        upper_bound = 0.2
+        condition = (
+            (pca_projection >= lower_bound) & (pca_projection <= upper_bound)
+        ).compute()
+
+        pca_projection = pca_projection.where(condition, drop=True)
+        condition = ~pca_projection.isnull().any(dim="component").compute()
+        pca_projection = pca_projection.where(condition, drop=True)
+        return pca_projection.location
 
     def plot_3D_pca(self):
         pca_projection, explained_variance = self.loader._load_pca_projection(
@@ -525,7 +548,7 @@ class PlotExtremes(InitializationConfig):
 
         # Convert box indices to RGB colors
         # Normalize indices to the range [0, 1] for RGB
-        # colors = box_indices / (n_bins + 1)
+        colors = box_indices / (n_bins + 1)
         # Plotting
         fig = plt.figure()
         ax = fig.add_subplot(111, projection="3d")
@@ -550,8 +573,41 @@ class PlotExtremes(InitializationConfig):
         saving_path = self.saving_path / "3D_pca.png"
         plt.savefig(saving_path)
 
-        plt.show()
+        # plt.show()
         return
+
+    def plot_2D_component(self):
+        pca_projection, explained_variance = self.loader._load_pca_projection(
+            explained_variance=True
+        )
+
+        n_bins = self.config.n_bins
+        box_indices = self.loader._load_bins()
+        # Convert box indices to RGB colors
+        # Normalize indices to the range [0, 1] for RGB
+        colors = box_indices / (n_bins + 1)
+        # Plotting
+        fig, ax = plt.subplots(figsize=(12, 8))
+
+        # Scatter plot
+        sc = ax.scatter(
+            pca_projection.isel(component=1).values.T,
+            pca_projection.isel(component=2).values.T,
+            # pca_projection.isel(component=2).values.T,
+            c=colors.values,
+            s=75,
+            edgecolor="k",
+        )
+
+        # Adding labels and title
+        ax.set_xlabel("PCA Component 2")
+        ax.set_ylabel("PCA Component 3")
+        # ax.set_zlabel("PCA Component 3")
+        ax.set_title("2D PCA Projection with RGB Colors")
+        ax.legend()
+
+        saving_path = self.saving_path / "2D_pca_23.png"
+        plt.savefig(saving_path)
 
     def distribution_per_region(self):
         boxes = self.loader._load_bins()
@@ -649,32 +705,32 @@ if __name__ == "__main__":
     # limits_bins = loader._load_limits_bins()
     # print(limits_bins)
     plot = PlotExtremes(config=config)
-    indices = np.array([0, 0, 18])
-    plot.region(indices=indices)
 
-    indices = np.array([2, 18, 8])
-    plot.region(indices=indices)
+    # plot.find_bins_origin()
 
-    indices = np.array([9, 10, 24])
+    indices = np.array([12, 12, 13])
     plot.region(indices=indices)
-
-    indices = np.array([5, 19, 16])
-    plot.region(indices=indices)
-
-    indices = np.array([22, 12, 13])
-    plot.region(indices=indices)
-
-    indices = np.array([23, 12, 13])
-    plot.region(indices=indices)
-
-    indices = np.array([12, 12, 12])
-    plot.region(indices=indices)
-
-    indices = np.array([11, 11, 11])
-    plot.region(indices=indices)
-    # plot.distribution_per_region()
-    plot.map_component()
-    plot.plot_3D_pca()
+    #
+    # indices = np.array([12, 11, 11])
+    # plot.region(indices=indices)
+    #
+    # indices = np.array([12, 11, 12])
+    # plot.region(indices=indices)
+    #
+    # indices = np.array([12, 11, 13])
+    # plot.region(indices=indices)
+    #
+    # indices = np.array([12, 13, 11])
+    # plot.region(indices=indices)
+    #
+    # indices = np.array([12, 13, 12])
+    # plot.region(indices=indices)
+    #
+    # indices = np.array([12, 13, 13])
+    # plot.region(indices=indices)
+    # # plot.distribution_per_region()
+    # plot.map_component()
+    # plot.plot_3D_pca()
 
     # plot.region_distribution()
     # plot.map_modis()
