@@ -32,6 +32,20 @@ class Logger:
         with open(self.filepath, "a") as file:
             file.write(formatted_message + "\n")
 
+    def raiset(self, error, message: str):
+        """
+        Small function to add the raise error in the log file.
+        Prints to console and appends to a file.
+        """
+        formatted_message = f"[{current_time}] {message}"
+
+        # Append to file
+        with open(self.filepath, "a") as file:
+            file.write(f"{error}. {formatted_message}\n")
+
+        # Print to console
+        raise formatted_message
+
 
 # Global variable to hold the logger instance
 logger = None
@@ -48,13 +62,19 @@ def printt(message: str):
     logger.printt(message)
 
 
-# Not yer used
-def timing_decorator(func):
-    def wrapper(*args, **kwargs):
-        start_time = time.time()
-        result = func(*args, **kwargs)
-        end_time = time.time()
-        printt(f"Function {func.__name__} took {end_time - start_time:.4f} seconds")
-        return result
+def raiset(message: str):
+    if logger is None:
+        raise RuntimeError("Logger not initialized. Call initialize_logger() first.")
+    logger.raiset(message)
 
-    return wrapper
+
+# Not yet used
+# def timing_decorator(func):
+#     def wrapper(*args, **kwargs):
+#         start_time = time.time()
+#         result = func(*args, **kwargs)
+#         end_time = time.time()
+#         printt(f"Function {func.__name__} took {end_time - start_time:.4f} seconds")
+#         return result
+#
+#     return wrapper

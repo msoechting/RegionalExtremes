@@ -9,7 +9,7 @@ import cartopy
 import random
 
 from config import InitializationConfig
-from loader import Loader, Saver
+from loader_and_saver import Loader, Saver
 from regional_extremes import parser_arguments
 from utils import printt
 from datahandler import create_handler
@@ -698,7 +698,7 @@ class PlotExtremes(InitializationConfig):
 if __name__ == "__main__":
     args = parser_arguments().parse_args()
 
-    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-09-02_13:55:46_eco_final"
+    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-09-03_10:16:51_eco_final"
     config = InitializationConfig(args)
     # loader = Loader(config)
     # print(loader._load_pca_matrix().explained_variance_ratio_)
@@ -708,9 +708,9 @@ if __name__ == "__main__":
 
     # plot.find_bins_origin()
 
-    indices = np.array([12, 12, 13])
-    plot.region(indices=indices)
-    #
+    # indices = np.array([12, 12, 13])
+    # plot.region(indices=indices)
+    ##
     # indices = np.array([12, 11, 11])
     # plot.region(indices=indices)
     #
@@ -725,12 +725,11 @@ if __name__ == "__main__":
     #
     # indices = np.array([12, 13, 12])
     # plot.region(indices=indices)
-    #
     # indices = np.array([12, 13, 13])
     # plot.region(indices=indices)
-    # # plot.distribution_per_region()
-    # plot.map_component()
-    # plot.plot_3D_pca()
+    ## plot.distribution_per_region()
+    plot.map_component()
+    plot.plot_3D_pca()
 
-    # plot.region_distribution()
+    plot.region_distribution()
     # plot.map_modis()

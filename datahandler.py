@@ -79,11 +79,11 @@ class DatasetHandler(ABC):
             printt(
                 f"Computation on the entire dataset. {self.data.sizes['location']} samples"
             )
-
         self.compute_variable()
         if self.scale:
             self._scale_data()
         self.data = self.data.transpose("location", "dayofyear", ...)
+
         return self.data
 
     @abstractmethod
@@ -192,7 +192,6 @@ class DatasetHandler(ABC):
             printt("Variance is computed.")
         else:
             self.data = msc
-
         self._reduce_temporal_resolution()
         self._rechunk_data()
         if not self.n_samples:

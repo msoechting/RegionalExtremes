@@ -37,6 +37,10 @@ class Loader:
         filepath (str): Path to the data file.
         """
         projection_path = self.config.saving_path / "pca_projection.zarr"
+        if not os.path.exists(projection_path):
+            printt(f"PCA projection not found at {projection_path}")
+            return None
+
         data = xr.open_zarr(projection_path)
         pca_projection = data.pca.stack(location=("longitude", "latitude")).transpose(
             "location", "component", ...
@@ -53,12 +57,25 @@ class Loader:
     def _load_limits_bins(self):
         """Saves the limits bins to a file."""
         limits_bins_path = self.config.saving_path / "limits_bins.npy"
+        if not os.path.exists(limits_bins_path):
+            printt(f"PCA projection not found at {projection_path}")
+            return None
+
         data = np.load(limits_bins_path)
         printt("Limits bins loaded.")
         return data
 
     def _load_bins(self):
-        bins_path = self.config.saving_path / "boxes.zarr"
+        bins_path = self.config.saving_path / "bins.zarr"
+        if not os.path.exists(bins_path):
+            bins_path = self.config.saving_path / "boxes.zarr"
+            if not os.path.exists(bins_path):
+                printt(f"Bins not found.")
+                return None
+            Warning(
+                'boxes.zarr is an inconsistent legacy name, change it for "bins.zarr"'
+            )
+
         data = xr.open_zarr(bins_path)
         data = data.bins.stack(location=("longitude", "latitude")).transpose(
             "location", "component", ...

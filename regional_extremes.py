@@ -15,8 +15,8 @@ import sys
 import os
 
 
-from utils import initialize_logger, printt, int_or_none
-from loader import Loader, Saver
+from utils import initialize_logger, printt, raiset, int_or_none
+from loader_and_saver import Loader, Saver
 from datahandler import create_handler
 from config import InitializationConfig, CLIMATIC_INDICES, ECOLOGICAL_INDICES
 
@@ -133,10 +133,18 @@ class RegionalExtremes:  # (InitializationConfig):
         self.saver = Saver(config)
 
         if self.config.path_load_experiment:
+            # Load every variable if already available, otherwise return None.
             self.pca = self.loader._load_pca_matrix()
+            self.projected_data = self.loader._load_pca_projection()
+            self.limits_bins = self.loader._load_limits_bins()
+            self.boxes = self.loader._load_bins()
+
         else:
             # Initialize a new PCA.
             self.pca = PCA(n_components=self.n_components)
+            self.projected_data = None
+            self.limits_bins = None
+            self.boxes = None
 
     def compute_pca_and_transform(
         self,
@@ -186,6 +194,11 @@ class RegionalExtremes:  # (InitializationConfig):
         Returns:
             np.ndarray: Transformed data after applying PCA.
         """
+        if self.projected_data is not None:
+            raiset(
+                ValueError,
+                "self.projected_data is not None, projected_data already have been computed.",
+            )
         self._validate_scaled_data(scaled_data)
 
         transformed_data = xr.apply_ufunc(
@@ -203,14 +216,12 @@ class RegionalExtremes:  # (InitializationConfig):
 
     def _validate_scaled_data(self, scaled_data: np.ndarray) -> None:
         """Validates the scaled data to ensure it matches the expected shape."""
-        print(scaled_data)
         if self.config.compute_variance:
             expected_shape = round(366 / self.config.time_resolution) * 2 + 1
         else:
             expected_shape = round(366 / self.config.time_resolution)
         if scaled_data.shape[1] != expected_shape:
-            raise ValueError(
-                f"scaled_data should have {expected_shape} columns, but has {scaled_data.shape[1]} columns."
+            raiset(ValueError, f"scaled_data should have {expected_shape} columns, but has {scaled_data.shape[1]} columns."
             )
 
     def define_limits_bins(self, projected_data: np.ndarray) -> list[np.ndarray]:
@@ -229,6 +240,7 @@ class RegionalExtremes:  # (InitializationConfig):
             list of np.ndarray: List where each array contains the bin limits for each component.
         """
         self._validate_inputs(projected_data)
+
         limits_bins = self._calculate_limits_bins(projected_data)
         self.saver._save_limits_bins(limits_bins)
         printt("Limits are computed and saved.")
@@ -237,7 +249,7 @@ class RegionalExtremes:  # (InitializationConfig):
     def _validate_inputs(self, projected_data: np.ndarray) -> None:
         """Validates the inputs for define_limits_bins."""
         if not hasattr(self.pca, "explained_variance_"):
-            raise ValueError("PCA model has not been trained yet.")
+            raiset(ValueError("PCA model has not been trained yet.")
 
         if projected_data.shape[1] != self.n_components:
             raise ValueError(
@@ -251,14 +263,10 @@ class RegionalExtremes:  # (InitializationConfig):
         """Calculates the limits bins for each component."""
         return [
             np.linspace(
-                # np.min(projected_data[:, component]),
-                # np.max(projected_data[:, component]),
                 np.quantile(projected_data[:, component], 0.05),
                 np.quantile(projected_data[:, component], 0.95),
-                self.n_bins + 1,
-            )[
-                1:-1
-            ]  # Remove first and last limits to avoid attributing new bins to extreme values
+                round(self.pca.explained_variance_ratio_[0] * self.n_bins) + 1,
+            )
             for component in range(self.n_components)
         ]
 
@@ -309,7 +317,7 @@ def main_train_pca(args):
 
 
 def main_define_limits(args):
-    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-08-30_15:04:11_eco_final"
+    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-09-03_10:16:51_eco_final"
     config = InitializationConfig(args)
 
     dataset_processor = create_handler(config=config, n_samples=None)
@@ -321,7 +329,22 @@ def main_define_limits(args):
         n_bins=args.n_bins,
     )
     projected_data = extremes_processor.apply_pca(scaled_data=data)
-    extremes_processor.define_limits_bins(projected_data=projected_data)
+    limits_bins = extremes_processor.define_limits_bins(projected_data=projected_data)
+    extremes_processor.find_bins(projected_data=projected_data, limits_bins=limits_bins)
+
+
+def main_finds_bins(args):
+    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-09-03_10:16:51_eco_final"
+    config = InitializationConfig(args)
+
+    extremes_processor = RegionalExtremes(
+        config=config,
+        n_components=args.n_components,
+        n_bins=args.n_bins,
+    )
+    projected_data = extremes_processor.apply_pca(scaled_data=data)
+    limits_bins = extremes_processor.define_limits_bins(projected_data=projected_data)
+    extremes_processor.find_bins(projected_data=projected_data, limits_bins=limits_bins)
 
 
 if __name__ == "__main__":
@@ -344,6 +367,6 @@ if __name__ == "__main__":
     # extremes_processor.find_bins(projected_data, limits_bins)
 
     # To train the PCA:
-    main_train_pca(args)
+    # main_train_pca(args)
     # To define the limits:
-    # main_define_limits(args)
+    main_define_limits(args)
