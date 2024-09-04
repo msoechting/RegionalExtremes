@@ -353,10 +353,11 @@ def main_finds_bins(args):
 
 if __name__ == "__main__":
     args = parser_arguments().parse_args()
-    args.name = "eco_final"
+    args.name = "eco_"
     args.index = "EVI"
     args.n_samples = 1000
     args.n_components = 3
+    args.n_bins = 50
     args.compute_variance = False
 
     # args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-08-09_12:45:09_2139535_Europe_eco_small"
@@ -371,6 +372,6 @@ if __name__ == "__main__":
     # extremes_processor.find_bins(projected_data, limits_bins)
 
     # To train the PCA:
-    # main_train_pca(args)
+    main_train_pca(args)
     # To define the limits:
-    main_finds_bins(args)
+    # main_finds_bins(args)

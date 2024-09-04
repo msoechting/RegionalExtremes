@@ -135,6 +135,69 @@ class PlotExtremes(InitializationConfig):
         # Show the plot
         # plt.show()
 
+    def map_bins(self, normalization=False):
+        """Map of the bins in RBG."""
+        bins = self.loader._load_bins().T
+        print(bins)
+
+        # Normalize the explained variance
+        # Normalize the data to the range [0, 1]
+        def _normalization(index):
+            band = bins.isel(component=index).values
+            print(band.shape)
+            return (band - np.nanmin(band)) / (np.nanmax(band) - np.nanmin(band))
+
+        normalized_red = _normalization(0)  # Red is the first component
+        normalized_green = _normalization(1)  # Green is the second component
+        normalized_blue = _normalization(2)  # blue is the third component
+
+        # Stack the components into a 3D array
+        rgb_normalized = np.dstack((normalized_red, normalized_green, normalized_blue))
+        # Transpose the array
+        rgb_normalized = np.transpose(rgb_normalized, (1, 2, 0))[:, :, 0]
+
+        # Set up the map projection
+        projection = cartopy.crs.PlateCarree()
+
+        # Create the figure and axis
+        fig, ax = plt.subplots(figsize=(12, 5), subplot_kw={"projection": projection})
+
+        # adjust the plot
+        plt.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05)
+
+        # Add coastlines and set global extent
+        ax.coastlines()
+        ax.add_feature(cartopy.feature.OCEAN, zorder=100, edgecolor="k")
+
+        # Plot the RGB data
+        img_extent = (
+            bins.longitude.min(),
+            bins.longitude.max(),
+            bins.latitude.min(),
+            bins.latitude.max(),
+        )
+
+        ax.set_extent(img_extent, crs=projection)
+        print(bins.longitude.values.shape)
+        print(bins.latitude.values.shape)
+        print(rgb_normalized.shape)
+        ax.pcolormesh(
+            bins.longitude.values,
+            bins.latitude.values,
+            rgb_normalized,
+            transform=projection,
+        )
+
+        # Add a title
+        plt.title("RGB Components on Earth Map")
+
+        map_saving_path = self.saving_path / "map_bins.png"
+        plt.savefig(map_saving_path)
+        printt("Plot saved")
+
+        # Show the plot
+        # plt.show()
+
     def map_modis(self):
         "Map vegetation index per month of modis."
 
@@ -301,13 +364,13 @@ class PlotExtremes(InitializationConfig):
         masked_lons = boxes.longitude.values[mask]
         masked_lats = boxes.latitude.values[mask]
         masked_lons_lats = list(zip(masked_lons, masked_lats))
-        locations = self.find_bins_origin()
-        masked_lons_lats = list(
-            zip(locations.longitude.values, locations.latitude.values)
-        )
-        mask = locations
+        # locations = self.find_bins_origin()
+        # masked_lons_lats = list(
+        #    zip(locations.longitude.values, locations.latitude.values)
+        # )
+        # mask = locations
 
-        indices = "center"
+        # indices = "center"
 
         printt(f"Number of samples in the region {indices}: {len(masked_lons_lats)}.")
         if len(masked_lons_lats) == 0:
@@ -706,32 +769,34 @@ if __name__ == "__main__":
     # print(limits_bins)
     plot = PlotExtremes(config=config)
 
-    plot.plot_2D_component()
+    plot.map_bins()
+
+    # plot.plot_2D_component()
 
     # plot.find_bins_origin()
 
-    indices = np.array([12, 12, 13])
-    plot.region(indices=indices)
-    ##
-    # indices = np.array([12, 11, 11])
+    # indices = np.array([20, 1, 1])
     # plot.region(indices=indices)
-    #
-    # indices = np.array([12, 11, 12])
-    # plot.region(indices=indices)
-    #
-    # indices = np.array([12, 11, 13])
-    # plot.region(indices=indices)
-    #
-    # indices = np.array([12, 13, 11])
-    # plot.region(indices=indices)
-    #
-    # indices = np.array([12, 13, 12])
-    # plot.region(indices=indices)
-    # indices = np.array([12, 13, 13])
-    # plot.region(indices=indices)
-    plot.distribution_per_region()
-    # plot.map_component()
-    # plot.plot_3D_pca()
+#
+# indices = np.array([21, 1, 1])
+# plot.region(indices=indices)
+#
+# indices = np.array([3, 2, 1])
+# plot.region(indices=indices)
+#
+# indices = np.array([6, 2, 1])
+# plot.region(indices=indices)
+#
+# indices = np.array([6, 2, 2])
+# plot.region(indices=indices)
+#
+# indices = np.array([9, 1, 2])
+# plot.region(indices=indices)
+# indices = np.array([12, 1, 1])
+# plot.region(indices=indices)
+# plot.distribution_per_region()
+# plot.map_component()
+# plot.plot_3D_pca()
 
-    # plot.region_distribution()
-    # plot.map_modis()
+# plot.region_distribution()
+# plot.map_modis()
