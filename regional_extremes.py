@@ -137,14 +137,14 @@ class RegionalExtremes:  # (InitializationConfig):
             self.pca = self.loader._load_pca_matrix()
             self.projected_data = self.loader._load_pca_projection()
             self.limits_bins = self.loader._load_limits_bins()
-            self.boxes = self.loader._load_bins()
+            self.bins = self.loader._load_bins()
 
         else:
             # Initialize a new PCA.
             self.pca = PCA(n_components=self.n_components)
             self.projected_data = None
             self.limits_bins = None
-            self.boxes = None
+            self.bins = None
 
     def compute_pca_and_transform(
         self,
@@ -196,8 +196,9 @@ class RegionalExtremes:  # (InitializationConfig):
         """
         if self.projected_data is not None:
             raiset(
-                ValueError,
-                "self.projected_data is not None, projected_data already have been computed.",
+                ValueError(
+                    "self.projected_data is not None, projected_data already have been computed.",
+                )
             )
         self._validate_scaled_data(scaled_data)
 
@@ -221,10 +222,13 @@ class RegionalExtremes:  # (InitializationConfig):
         else:
             expected_shape = round(366 / self.config.time_resolution)
         if scaled_data.shape[1] != expected_shape:
-            raiset(ValueError, f"scaled_data should have {expected_shape} columns, but has {scaled_data.shape[1]} columns."
+            raiset(
+                ValueError(
+                    f"scaled_data should have {expected_shape} columns, but has {scaled_data.shape[1]} columns."
+                )
             )
 
-    def define_limits_bins(self, projected_data: np.ndarray) -> list[np.ndarray]:
+    def define_limits_bins(self) -> list[np.ndarray]:
         """
         Define the bounds of each bin on the projected data for each component.
         Ideally applied on the largest possible amount of data to capture
@@ -239,25 +243,27 @@ class RegionalExtremes:  # (InitializationConfig):
         Returns:
             list of np.ndarray: List where each array contains the bin limits for each component.
         """
-        self._validate_inputs(projected_data)
+        self._validate_inputs(self.projected_data)
 
-        limits_bins = self._calculate_limits_bins(projected_data)
-        self.saver._save_limits_bins(limits_bins)
+        self.limits_bins = self._calculate_limits_bins(self.projected_data)
+        self.saver._save_limits_bins(self.limits_bins)
         printt("Limits are computed and saved.")
-        return limits_bins
+        return self.limits_bins
 
     def _validate_inputs(self, projected_data: np.ndarray) -> None:
         """Validates the inputs for define_limits_bins."""
         if not hasattr(self.pca, "explained_variance_"):
-            raiset(ValueError("PCA model has not been trained yet.")
+            raiset(ValueError("PCA model has not been trained yet."))
 
         if projected_data.shape[1] != self.n_components:
-            raise ValueError(
-                "projected_data should have the same number of columns as n_components"
+            raiset(
+                ValueError(
+                    "projected_data should have the same number of columns as n_components"
+                )
             )
 
         if self.n_bins <= 0:
-            raise ValueError("n_bins should be greater than 0")
+            raiset(ValueError("n_bins should be greater than 0"))
 
     def _calculate_limits_bins(self, projected_data: np.ndarray) -> list[np.ndarray]:
         """Calculates the limits bins for each component."""
@@ -265,32 +271,31 @@ class RegionalExtremes:  # (InitializationConfig):
             np.linspace(
                 np.quantile(projected_data[:, component], 0.05),
                 np.quantile(projected_data[:, component], 0.95),
-                round(self.pca.explained_variance_ratio_[0] * self.n_bins) + 1,
+                round(self.pca.explained_variance_ratio_[component] * self.n_bins) + 1,
             )
             for component in range(self.n_components)
         ]
 
     # Function to find the box for multiple points
-    def find_bins(self, projected_data, limits_bins):
-        assert projected_data.shape[1] == len(limits_bins)
+    def find_bins(self):
+        assert self.projected_data.shape[1] == len(self.limits_bins)
         assert (
-            len(limits_bins) == self.n_components
+            len(self.limits_bins) == self.n_components
         ), "the lenght of limits_bins list is not equal to the number of components"
-        assert (
-            limits_bins[0].shape[0] == self.n_bins - 1
-        ), "the limits do not fit the number of bins"
+
         box_indices = np.zeros(
-            (projected_data.shape[0], projected_data.shape[1]), dtype=int
+            (self.projected_data.shape[0], self.projected_data.shape[1]), dtype=int
         )
         # defines boxes
-        for i, limits_bin in enumerate(limits_bins):
+        for i, limits_bin in enumerate(self.limits_bins):
             # get the indices of the bins to which each value in input array belongs.
-            box_indices[:, i] = np.digitize(projected_data[:, i], limits_bin)
-        self.saver._save_bins(box_indices, projected_data)
+            box_indices[:, i] = np.digitize(self.projected_data[:, i], limits_bin)
+        self.saver._save_bins(box_indices, self.projected_data)
+        self.bins = box_indices
         return box_indices
 
     def apply_threshold():
-        raise NotImplementedError()
+        raiset(NotImplementedError())
 
 
 def main_train_pca(args):
@@ -342,9 +347,8 @@ def main_finds_bins(args):
         n_components=args.n_components,
         n_bins=args.n_bins,
     )
-    projected_data = extremes_processor.apply_pca(scaled_data=data)
-    limits_bins = extremes_processor.define_limits_bins(projected_data=projected_data)
-    extremes_processor.find_bins(projected_data=projected_data, limits_bins=limits_bins)
+    extremes_processor.define_limits_bins()
+    extremes_processor.find_bins()
 
 
 if __name__ == "__main__":
@@ -369,4 +373,4 @@ if __name__ == "__main__":
     # To train the PCA:
     # main_train_pca(args)
     # To define the limits:
-    main_define_limits(args)
+    main_finds_bins(args)

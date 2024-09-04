@@ -600,13 +600,13 @@ class PlotExtremes(InitializationConfig):
         )
 
         # Adding labels and title
-        ax.set_xlabel("PCA Component 2")
-        ax.set_ylabel("PCA Component 3")
+        ax.set_xlabel("PCA Component 1")
+        ax.set_ylabel("PCA Component 2")
         # ax.set_zlabel("PCA Component 3")
         ax.set_title("2D PCA Projection with RGB Colors")
         ax.legend()
 
-        saving_path = self.saving_path / "2D_pca_23.png"
+        saving_path = self.saving_path / "2D_pca_12.png"
         plt.savefig(saving_path)
 
     def distribution_per_region(self):
@@ -706,10 +706,12 @@ if __name__ == "__main__":
     # print(limits_bins)
     plot = PlotExtremes(config=config)
 
+    plot.plot_2D_component()
+
     # plot.find_bins_origin()
 
-    # indices = np.array([12, 12, 13])
-    # plot.region(indices=indices)
+    indices = np.array([12, 12, 13])
+    plot.region(indices=indices)
     ##
     # indices = np.array([12, 11, 11])
     # plot.region(indices=indices)
@@ -727,9 +729,9 @@ if __name__ == "__main__":
     # plot.region(indices=indices)
     # indices = np.array([12, 13, 13])
     # plot.region(indices=indices)
-    ## plot.distribution_per_region()
-    plot.map_component()
-    plot.plot_3D_pca()
+    plot.distribution_per_region()
+    # plot.map_component()
+    # plot.plot_3D_pca()
 
-    plot.region_distribution()
+    # plot.region_distribution()
     # plot.map_modis()

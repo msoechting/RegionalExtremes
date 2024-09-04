@@ -1,6 +1,7 @@
 import datetime
 import os
 import time
+import sys
 
 
 def int_or_none(value):
@@ -14,8 +15,8 @@ class Logger:
         self.filepath = filepath / "log.txt"
 
         # Ensure the log file exists
-        if not os.path.exists(self.filepath):
-            open(self.filepath, "w").close()
+        self.filepath.parent.mkdir(parents=True, exist_ok=True)
+        self.filepath.touch(exist_ok=True)
 
     def printt(self, message: str):
         """
@@ -32,19 +33,22 @@ class Logger:
         with open(self.filepath, "a") as file:
             file.write(formatted_message + "\n")
 
-    def raiset(self, error, message: str):
+    def raiset(self, error):
         """
-        Small function to add the raise error in the log file.
+        Small function to track the different steps of the program with the time.
         Prints to console and appends to a file.
         """
-        formatted_message = f"[{current_time}] {message}"
+        current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        formatted_message = f"[{current_time}] ValueError: {error}"
+
+        # Print to console
+        print(formatted_message)
 
         # Append to file
         with open(self.filepath, "a") as file:
-            file.write(f"{error}. {formatted_message}\n")
+            file.write(formatted_message + "\n")
 
-        # Print to console
-        raise formatted_message
+        raise error
 
 
 # Global variable to hold the logger instance
@@ -62,7 +66,7 @@ def printt(message: str):
     logger.printt(message)
 
 
-def raiset(message: str):
+def raiset(message):
     if logger is None:
         raise RuntimeError("Logger not initialized. Call initialize_logger() first.")
     logger.raiset(message)

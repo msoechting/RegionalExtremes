@@ -54,16 +54,16 @@ class Loader:
         else:
             return pca_projection
 
-    def _load_limits_bins(self):
-        """Saves the limits bins to a file."""
-        limits_bins_path = self.config.saving_path / "limits_bins.npy"
+    def _load_limits_bins(self) -> list[np.ndarray]:
+        """Loads the limits bins from a file."""
+        limits_bins_path = self.config.saving_path / "limits_bins.npz"
         if not os.path.exists(limits_bins_path):
-            printt(f"PCA projection not found at {projection_path}")
+            print(f"Limits bins not found at {limits_bins_path}")
             return None
-
         data = np.load(limits_bins_path)
-        printt("Limits bins loaded.")
-        return data
+        limits_bins = [data[f"arr_{i}"] for i in range(len(data.files))]
+        print("Limits bins loaded.")
+        return limits_bins
 
     def _load_bins(self):
         bins_path = self.config.saving_path / "bins.zarr"
@@ -82,6 +82,7 @@ class Loader:
         )
         condition = ~data.isnull().any(dim="component").compute()
         data = data.where(condition, drop=True)
+        printt("Bins loaded.")
         return data
 
 
@@ -135,12 +136,13 @@ class Saver:
 
     def _save_limits_bins(self, limits_bins: list[np.ndarray]) -> None:
         """Saves the limits bins to a file."""
-        limits_bins_path = self.config.saving_path / "limits_bins.npy"
+        limits_bins_path = self.config.saving_path / "limits_bins.npz"
         if os.path.exists(limits_bins_path):
             raise FileExistsError(
                 f"The file {limits_bins_path} already exists. Rewriting is not allowed."
             )
-        np.save(limits_bins_path, limits_bins)
+        np.savez(limits_bins_path, *limits_bins)
+        print(f"Limits bins saved to {limits_bins_path}")
 
     def _save_bins(self, boxes_indices, projected_data):
         """Saves the bins to a file."""
