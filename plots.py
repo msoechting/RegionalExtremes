@@ -138,13 +138,13 @@ class PlotExtremes(InitializationConfig):
     def map_bins(self, normalization=False):
         """Map of the bins in RBG."""
         bins = self.loader._load_bins().T
+        bins = bins.unstack("location")
         print(bins)
 
         # Normalize the explained variance
         # Normalize the data to the range [0, 1]
         def _normalization(index):
             band = bins.isel(component=index).values
-            print(band.shape)
             return (band - np.nanmin(band)) / (np.nanmax(band) - np.nanmin(band))
 
         normalized_red = _normalization(0)  # Red is the first component
@@ -154,7 +154,7 @@ class PlotExtremes(InitializationConfig):
         # Stack the components into a 3D array
         rgb_normalized = np.dstack((normalized_red, normalized_green, normalized_blue))
         # Transpose the array
-        rgb_normalized = np.transpose(rgb_normalized, (1, 2, 0))[:, :, 0]
+        rgb_normalized = np.transpose(rgb_normalized, (1, 0, 2))
 
         # Set up the map projection
         projection = cartopy.crs.PlateCarree()
@@ -178,9 +178,7 @@ class PlotExtremes(InitializationConfig):
         )
 
         ax.set_extent(img_extent, crs=projection)
-        print(bins.longitude.values.shape)
-        print(bins.latitude.values.shape)
-        print(rgb_normalized.shape)
+
         ax.pcolormesh(
             bins.longitude.values,
             bins.latitude.values,
@@ -761,7 +759,7 @@ class PlotExtremes(InitializationConfig):
 if __name__ == "__main__":
     args = parser_arguments().parse_args()
 
-    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-09-03_10:16:51_eco_final"
+    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-09-04_15:18:47_eco_50bins"
     config = InitializationConfig(args)
     # loader = Loader(config)
     # print(loader._load_pca_matrix().explained_variance_ratio_)
@@ -769,34 +767,34 @@ if __name__ == "__main__":
     # print(limits_bins)
     plot = PlotExtremes(config=config)
 
-    plot.map_bins()
+    # plot.map_bins()
 
-    # plot.plot_2D_component()
+    plot.plot_2D_component()
 
     # plot.find_bins_origin()
 
     # indices = np.array([20, 1, 1])
     # plot.region(indices=indices)
-#
-# indices = np.array([21, 1, 1])
-# plot.region(indices=indices)
-#
-# indices = np.array([3, 2, 1])
-# plot.region(indices=indices)
-#
-# indices = np.array([6, 2, 1])
-# plot.region(indices=indices)
-#
-# indices = np.array([6, 2, 2])
-# plot.region(indices=indices)
-#
-# indices = np.array([9, 1, 2])
-# plot.region(indices=indices)
-# indices = np.array([12, 1, 1])
-# plot.region(indices=indices)
-# plot.distribution_per_region()
-# plot.map_component()
-# plot.plot_3D_pca()
+    #
+    # indices = np.array([21, 1, 1])
+    # plot.region(indices=indices)
+    #
+    # indices = np.array([3, 2, 1])
+    # plot.region(indices=indices)
+    #
+    # indices = np.array([6, 2, 1])
+    # plot.region(indices=indices)
+    #
+    # indices = np.array([6, 2, 2])
+    # plot.region(indices=indices)
+    #
+    # indices = np.array([9, 1, 2])
+    # plot.region(indices=indices)
+    # indices = np.array([12, 1, 1])
+    # plot.region(indices=indices)
+    plot.distribution_per_region()
+    # plot.map_component()
+    # plot.plot_3D_pca()
 
-# plot.region_distribution()
-# plot.map_modis()
+    plot.region_distribution()
+    # plot.map_modis()

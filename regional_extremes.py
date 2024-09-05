@@ -5,7 +5,7 @@ import numpy as np
 import json
 import random
 import datetime
-from sklearn.decomposition import PCA
+from sklearn.decomposition import PCA, KernelPCA
 import pandas as pd
 import pickle as pk
 from pathlib import Path
@@ -13,6 +13,7 @@ from typing import Union
 import time
 import sys
 import os
+from sklearn.neighbors import NearestNeighbors
 
 
 from utils import initialize_logger, printt, raiset, int_or_none
@@ -90,7 +91,14 @@ def parser_arguments():
         "--n_bins",
         type=int,
         default=25,
-        help="number of bins to define the regions of similar seasonal cycle.",
+        help="number of bins to define the regions of similar seasonal cycle. n_bins is proportional. ",
+    )
+
+    parser.add_argument(
+        "--kernel_pca",
+        type=str,
+        default=False,
+        help="Using a Kernel PCA instead of a PCA.",
     )
 
     parser.add_argument(
@@ -141,7 +149,10 @@ class RegionalExtremes:  # (InitializationConfig):
 
         else:
             # Initialize a new PCA.
-            self.pca = PCA(n_components=self.n_components)
+            if self.config.k_pca:
+                self.pca = KernelPCA(n_components=self.n_components, kernel="rbf")
+            else:
+                self.pca = PCA(n_components=self.n_components)
             self.projected_data = None
             self.limits_bins = None
             self.bins = None
@@ -169,9 +180,17 @@ class RegionalExtremes:  # (InitializationConfig):
         # Fit the PCA. Each colomns give us the projection through 1 component.
         pca_components = self.pca.fit_transform(scaled_data)
 
-        printt(
-            f"PCA performed. sum explained variance: {sum(self.pca.explained_variance_ratio_)}. {self.pca.explained_variance_ratio_})"
-        )
+        if isinstance(self.pca, PCA):
+            print(
+                f"PCA performed. Sum of explained variance: {sum(self.pca.explained_variance_ratio_)}. "
+                f"Explained variance ratio: {self.pca.explained_variance_ratio_}"
+            )
+        elif isinstance(self.pca, KernelPCA):
+            print(
+                "KernelPCA performed. Explained variance ratio is not available for KernelPCA."
+            )
+        else:
+            print("Unknown PCA type.")
 
         # Save the PCA model
         pca_path = self.config.saving_path / "pca_matrix.pkl"
@@ -210,9 +229,9 @@ class RegionalExtremes:  # (InitializationConfig):
         )
         printt("Data are projected in the feature space.")
 
-        self.saver._save_pca_projection(
-            transformed_data, self.pca.explained_variance_ratio_
-        )
+        # self.saver._save_pca_projection(
+        #    transformed_data, self.pca.explained_variance_ratio_
+        # )
         return transformed_data
 
     def _validate_scaled_data(self, scaled_data: np.ndarray) -> None:
@@ -267,14 +286,25 @@ class RegionalExtremes:  # (InitializationConfig):
 
     def _calculate_limits_bins(self, projected_data: np.ndarray) -> list[np.ndarray]:
         """Calculates the limits bins for each component."""
-        return [
-            np.linspace(
-                np.quantile(projected_data[:, component], 0.05),
-                np.quantile(projected_data[:, component], 0.95),
-                round(self.pca.explained_variance_ratio_[component] * self.n_bins) + 1,
-            )
-            for component in range(self.n_components)
-        ]
+        if isinstance(self.pca, PCA):
+            return [
+                np.linspace(
+                    np.quantile(projected_data[:, component], 0.05),
+                    np.quantile(projected_data[:, component], 0.95),
+                    round(self.pca.explained_variance_ratio_[component] * self.n_bins)
+                    + 1,
+                )
+                for component in range(self.n_components)
+            ]
+        else:
+            return [
+                np.linspace(
+                    np.quantile(projected_data[:, component], 0.05),
+                    np.quantile(projected_data[:, component], 0.95),
+                    self.n_bins + 1,
+                )
+                for component in range(self.n_components)
+            ]
 
     # Function to find the box for multiple points
     def find_bins(self):
@@ -310,15 +340,13 @@ def main_train_pca(args):
         n_components=args.n_components,
         n_bins=args.n_bins,
     )
-    projected_data = extremes_processor.compute_pca_and_transform(
-        scaled_data=data_subset
-    )
+    extremes_processor.compute_pca_and_transform(scaled_data=data_subset)
     dataset_processor = create_handler(config=config, n_samples=None)  # all the dataset
     data = dataset_processor.preprocess_data()
 
-    projected_data = extremes_processor.apply_pca(scaled_data=data)
-    limits_bins = extremes_processor.define_limits_bins(projected_data=projected_data)
-    extremes_processor.find_bins(projected_data=projected_data, limits_bins=limits_bins)
+    extremes_processor.apply_pca(scaled_data=data)
+    extremes_processor.define_limits_bins()
+    extremes_processor.find_bins()
 
 
 def main_define_limits(args):
@@ -339,7 +367,7 @@ def main_define_limits(args):
 
 
 def main_finds_bins(args):
-    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-09-03_10:16:51_eco_final"
+    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-09-04_15:18:47_eco_"
     config = InitializationConfig(args)
 
     extremes_processor = RegionalExtremes(
@@ -353,9 +381,10 @@ def main_finds_bins(args):
 
 if __name__ == "__main__":
     args = parser_arguments().parse_args()
-    args.name = "eco_"
+    args.name = "eco_kpca"
     args.index = "EVI"
-    args.n_samples = 1000
+    args.k_pca = True
+    args.n_samples = 10
     args.n_components = 3
     args.n_bins = 50
     args.compute_variance = False

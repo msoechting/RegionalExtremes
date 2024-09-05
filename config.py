@@ -46,6 +46,7 @@ class InitializationConfig:
         self.time_resolution = args.time_resolution
         self.index = args.index
         self.compute_variance = args.compute_variance
+        self.k_pca = args.k_pca
 
         self._set_saving_path(args)
         initialize_logger(self.saving_path)
