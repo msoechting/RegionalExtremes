@@ -228,10 +228,13 @@ class RegionalExtremes:  # (InitializationConfig):
             output_core_dims=[["component"]],  # Resulting dimension is 'component'
         )
         printt("Data are projected in the feature space.")
-
-        # self.saver._save_pca_projection(
-        #    transformed_data, self.pca.explained_variance_ratio_
-        # )
+        if isinstance(self.pca, PCA):
+            self.saver._save_pca_projection(
+                transformed_data, self.pca.explained_variance_ratio_
+            )
+        else:
+            self.saver._save_pca_projection(transformed_data, None)
+        self.projected_data = transformed_data
         return transformed_data
 
     def _validate_scaled_data(self, scaled_data: np.ndarray) -> None:
@@ -271,7 +274,7 @@ class RegionalExtremes:  # (InitializationConfig):
 
     def _validate_inputs(self, projected_data: np.ndarray) -> None:
         """Validates the inputs for define_limits_bins."""
-        if not hasattr(self.pca, "explained_variance_"):
+        if isinstance(self.pca, PCA) and not hasattr(self.pca, "explained_variance_"):
             raiset(ValueError("PCA model has not been trained yet."))
 
         if projected_data.shape[1] != self.n_components:
@@ -324,83 +327,213 @@ class RegionalExtremes:  # (InitializationConfig):
         self.bins = box_indices
         return box_indices
 
-    def apply_threshold():
-        raiset(NotImplementedError())
+    def nearestneighbors(self):
+        distances, indices = NearestNeighbors(n_neighbors=20, algorithm="kd_tree").fit(
+            X
+        )
 
+    def apply_threshold(self):
+        unique_bins, counts = np.unique(self.bins.values, axis=0, return_counts=True)
 
-def main_train_pca(args):
-    config = InitializationConfig(args)
-    dataset_processor = create_handler(
-        config=config, n_samples=args.n_samples  # args.n_samples,  # all the dataset
-    )
+        dataset_processor = create_handler(config=config, n_samples=100)
+        msc, data = dataset_processor.preprocess_data(
+            scale=False, return_time_serie=True, reduce_temporal_resolution=False
+        )
+        self.bins = self.bins.sel(location=data.location)
 
-    data_subset = dataset_processor.preprocess_data()
-    extremes_processor = RegionalExtremes(
-        config=config,
-        n_components=args.n_components,
-        n_bins=args.n_bins,
-    )
-    extremes_processor.compute_pca_and_transform(scaled_data=data_subset)
-    dataset_processor = create_handler(config=config, n_samples=None)  # all the dataset
-    data = dataset_processor.preprocess_data()
+        quantile_levels = np.concatenate(
+            [np.array([0.01, 0.025, 0.05]), np.array([0.95, 0.975, 0.99])]
+        )
 
-    extremes_processor.apply_pca(scaled_data=data)
-    extremes_processor.define_limits_bins()
-    extremes_processor.find_bins()
+        # Create a new DataArray to store the quantile values (0.025 or 0.975) for extreme values
+        quantile_values = xr.full_like(data, np.nan)
 
+        for unique_bin in unique_bins:
+            mask = np.all(self.bins.values.T == unique_bin[:, np.newaxis], axis=0)
 
-def main_define_limits(args):
-    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-09-03_10:16:51_eco_final"
-    config = InitializationConfig(args)
+            # Get the lat and lon values where the mask is true
+            masked_lons = self.bins.longitude.values[mask]
+            masked_lats = self.bins.latitude.values[mask]
+            masked_lons_lats = list(zip(masked_lons, masked_lats))
 
-    dataset_processor = create_handler(config=config, n_samples=None)
-    data = dataset_processor.preprocess_data()
+            subset_data = data.isel(location=mask)
+            subset_msc = msc.isel(location=mask)
 
-    extremes_processor = RegionalExtremes(
-        config=config,
-        n_components=args.n_components,
-        n_bins=args.n_bins,
-    )
-    projected_data = extremes_processor.apply_pca(scaled_data=data)
-    limits_bins = extremes_processor.define_limits_bins(projected_data=projected_data)
-    extremes_processor.find_bins(projected_data=projected_data, limits_bins=limits_bins)
+            # Remove the MSC for each samples
+            if subset_data.shape[0] > 0:
+                print("new region")
+                # Extract day of year from subset_data
+                subset_data["dayofyear"] = subset_data["time.dayofyear"]
+                # Align subset_msc with subset_data
+                aligned_msc = subset_msc.sel(dayofyear=subset_data["dayofyear"])
+                # Subtract the seasonal cycle
+                deseasonalized = subset_data - aligned_msc
+                deseasonalized = deseasonalized.chunk(
+                    {
+                        "time": len(deseasonalized.time),
+                        "location": len(deseasonalized.location),
+                    }
+                )
 
+                # Compute the quantiles for all levels across time and location
+                quantiles = deseasonalized.quantile(
+                    quantile_levels, dim=["time", "location"]
+                )
 
-def main_finds_bins(args):
-    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-09-04_15:18:47_eco_"
-    config = InitializationConfig(args)
+                # Assign quantile levels to each value
+                for i, level in enumerate(quantile_levels):
+                    if i == 0:
+                        print(deseasonalized.values.shape)
+                        print(quantiles.sel(quantile=level).values)
+                        print(
+                            (
+                                deseasonalized < quantiles.sel(quantile=level).values
+                            ).shape
+                        )
+                        # Values below the lowest quantile
+                        quantile_values = quantile_values.assign(
+                            location=xr.where(
+                                deseasonalized < quantiles.sel(quantile=level).values,
+                                level,
+                                quantile_values.sel(location=deseasonalized.location),
+                            )
+                        )
+                    elif i == len(quantile_levels) - 1:
+                        # Values above the highest quantile
+                        quantile_values = xr.where(
+                            deseasonalized >= quantiles.sel(quantile=level).values,
+                            level,
+                            quantile_values,
+                        )
+                    else:
+                        # Values between quantiles
+                        lower_level = quantile_levels[i - 1]
+                        quantile_values = xr.where(
+                            (
+                                deseasonalized
+                                >= quantiles.sel(quantile=lower_level).values
+                            )
+                            & (deseasonalized < quantiles.sel(quantile=level)).values,
+                            level,
+                            quantile_values,
+                        )
 
-    extremes_processor = RegionalExtremes(
-        config=config,
-        n_components=args.n_components,
-        n_bins=args.n_bins,
-    )
-    extremes_processor.define_limits_bins()
-    extremes_processor.find_bins()
+                # Define the colormap for different quantile levels
+                colors = {
+                    0.025: "blue",  # Color for below the 0.025 quantile
+                    0.975: "red",  # Color for above the 0.975 quantile
+                    # Add more color mappings as needed for other quantile levels
+                }
+
+                # Create a base figure
+                plt.figure(figsize=(10, 6))
+
+                plt.plot(
+                    subset_data["time"],
+                    subset_data,
+                    label="Original Data",
+                    color="blue",
+                )
+
+                # Plot the deseasonalized data
+                plt.plot(
+                    subset_data["time"],
+                    deseasonalized,
+                    label="Deseasonalized Data",
+                    color="black",
+                    zorder=1,
+                )
+
+                # Loop over time intervals and apply color spans for extreme quantiles
+                for i in range(len(subset_data["time"]) - 1):
+                    # Check the quantile value at each time step
+                    quantile_level = quantile_values[i]
+
+                    # If the quantile level corresponds to one of the defined extremes (e.g., 0.025 or 0.975)
+                    if quantile_level in colors:
+                        # Highlight the time span between two time points
+                        plt.axvspan(
+                            subset_data["time"].values[i],  # Start of the time interval
+                            subset_data["time"].values[
+                                i + 1
+                            ],  # End of the time interval
+                            color=colors[
+                                quantile_level
+                            ],  # Color based on the quantile level
+                            alpha=0.3,  # Transparency of the shaded region
+                        )
+
+                # Add title and labels
+                plt.title("Deseasonalized Data with Extreme Quantile Color Coding")
+                plt.xlabel("Time")
+                plt.ylabel("Deseasonalized Values")
+
+                # Add legend manually for quantile colors
+                handles = [
+                    plt.Line2D([0], [0], color=color, lw=4) for color in colors.values()
+                ]
+                labels = [f"Quantile {level}" for level in colors.keys()]
+                plt.legend(handles, labels)
+
+                # Show the plot
+                plt.savefig(
+                    "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-09-04_15:18:47_eco_50bins/EVI/plots/extremes.png"
+                )
+                sys.exit()
+
+        self.saver_save_extremes(quantile_values)
 
 
 if __name__ == "__main__":
     args = parser_arguments().parse_args()
-    args.name = "eco_kpca"
+    args.name = "eco_threshold"
     args.index = "EVI"
-    args.k_pca = True
+    args.k_pca = False
     args.n_samples = 10
     args.n_components = 3
     args.n_bins = 50
     args.compute_variance = False
 
-    # args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-08-09_12:45:09_2139535_Europe_eco_small"
-    # config = InitializationConfig(args)
-    # extremes_processor = RegionalExtremes(
-    #     config=config,
-    #     n_components=args.n_components,
-    #     n_bins=args.n_bins,
-    # )
-    # projected_data = extremes_processor.loader._load_pca_projection()
-    # limits_bins = extremes_processor.define_limits_bins(projected_data=projected_data)
-    # extremes_processor.find_bins(projected_data, limits_bins)
+    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-09-04_15:18:47_eco_50bins"
 
-    # To train the PCA:
-    main_train_pca(args)
-    # To define the limits:
-    # main_finds_bins(args)
+    # Initialization of the configs, load and save paths, log.txt.
+    config = InitializationConfig(args)
+
+    # Initialization of RegionalExtremes, load data if already computed.
+    extremes_processor = RegionalExtremes(
+        config=config,
+        n_components=args.n_components,
+        n_bins=args.n_bins,
+    )
+
+    # Load a subset of the dataset and fit the PCA
+    if config.path_load_experiment is None:
+        # Initialization of the climatic or ecological DatasetHandler
+        dataset = create_handler(
+            config=config,
+            n_samples=args.n_samples,  # args.n_samples,  # all the dataset
+        )
+        # Load and preprocess the dataset
+        data_subset = dataset.preprocess_data()
+
+        # Fit the PCA on the data
+        extremes_processor.compute_pca_and_transform(scaled_data=data_subset)
+
+    # Apply the PCA to the entire dataset
+    if extremes_processor.projected_data is None:
+        dataset_processor = create_handler(
+            config=config, n_samples=None
+        )  # all the dataset
+        data = dataset_processor.preprocess_data()
+        extremes_processor.apply_pca(scaled_data=data)
+
+    # Define the boundaries of the bins
+    if extremes_processor.limits_bins is None:
+        extremes_processor.define_limits_bins()
+
+    # Attribute a bins to each location
+    if extremes_processor.bins is None:
+        extremes_processor.find_bins()
+
+    # Apply the regional threshold and compute the extremes
+    extremes_processor.apply_threshold()

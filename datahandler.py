@@ -33,19 +33,17 @@ VARIABLE_NAME = lambda index: f"{index}gapfilled_QCdyn"
 
 
 @staticmethod
-def create_handler(config, n_samples, scale=True):
+def create_handler(config, n_samples):
     if config.index in ECOLOGICAL_INDICES:
-        return EcologicalDatasetHandler(config=config, n_samples=n_samples, scale=scale)
+        return EcologicalDatasetHandler(config=config, n_samples=n_samples)
     elif config.index in CLIMATIC_INDICES:
-        return ClimaticDatasetHandler(config=config, n_samples=n_samples, scale=scale)
+        return ClimaticDatasetHandler(config=config, n_samples=n_samples)
     else:
         raise ValueError("Invalid index")
 
 
 class DatasetHandler(ABC):
-    def __init__(
-        self, config: InitializationConfig, n_samples: Union[int, None], scale: bool
-    ):
+    def __init__(self, config: InitializationConfig, n_samples: Union[int, None]):
         """
         Initialize DatasetHandler.
 
@@ -55,14 +53,15 @@ class DatasetHandler(ABC):
         """
         self.config = config
         self.n_samples = n_samples
-        self.scale = scale
 
         self.max_data = None
         self.min_data = None
         self.data = None
         self.variable = None
 
-    def preprocess_data(self):
+    def preprocess_data(
+        self, scale=True, reduce_temporal_resolution=True, return_time_serie=False
+    ):
         """
         Preprocess data based on the index.
         """
@@ -79,12 +78,25 @@ class DatasetHandler(ABC):
             printt(
                 f"Computation on the entire dataset. {self.data.sizes['location']} samples"
             )
-        self.compute_variable()
-        if self.scale:
-            self._scale_data()
-        self.data = self.data.transpose("location", "dayofyear", ...)
 
-        return self.data
+        self.compute_variable()
+
+        if reduce_temporal_resolution:
+            self._reduce_temporal_resolution()
+
+        if not self.n_samples:
+            self._remove_nans()
+
+        if scale:
+            self._scale_variable()
+
+        self.variable = self.variable.transpose("location", "dayofyear", ...)
+
+        if return_time_serie:
+            self.data = self.data.transpose("location", "time", ...)
+            return self.variable, self.data
+        else:
+            return self.variable
 
     @abstractmethod
     def _dataset_specific_loading(self, *args, **kwargs):
@@ -175,7 +187,7 @@ class DatasetHandler(ABC):
         )
         return in_europe
 
-    def compute_variable(self, scale=True):
+    def compute_variable(self):
         """
         Compute the Mean Seasonal Cycle (MSC) and optionally the Variance Seasonal Cycle (VSC)
         of n samples and scale it between 0 and 1.
@@ -188,21 +200,14 @@ class DatasetHandler(ABC):
 
         if self.config.compute_variance:
             vsc = self._compute_vsc()
-            self.data = self._combine_msc_vsc(msc, vsc)
+            self.variable = self._combine_msc_vsc(msc, vsc)
             printt("Variance is computed.")
         else:
-            self.data = msc
-        self._reduce_temporal_resolution()
+            self.variable = msc
         self._rechunk_data()
-        if not self.n_samples:
-            self._remove_nans()
 
     def _compute_msc(self):
-        return (
-            self.data.groupby("time.dayofyear")
-            .mean("time", skipna=True)
-            .isel(dayofyear=slice(1, 365))
-        )
+        return self.data.groupby("time.dayofyear").mean("time", skipna=True)
 
     def _compute_vsc(self):
         return (
@@ -217,18 +222,20 @@ class DatasetHandler(ABC):
         return msc_vsc.assign_coords(dayofyear=("dayofyear", range(total_days)))
 
     def _rechunk_data(self):
-        self.data = self.data.chunk(
-            {"dayofyear": len(self.data.dayofyear), "location": 1}
+        self.variable = self.variable.chunk(
+            {"dayofyear": len(self.variable.dayofyear), "location": 1}
         )
 
     def _remove_nans(self):
-        condition = ~self.data.isnull().any(dim="dayofyear").compute()
-        self.data = self.data.where(condition, drop=True)
+        condition = ~self.variable.isnull().any(dim="dayofyear").compute()
+        self.variable = self.variable.where(condition, drop=True)
         printt("NaNs removed.")
 
     def _reduce_temporal_resolution(self):
-        self.data = self.data.isel(
-            dayofyear=slice(1, len(self.data.dayofyear), self.config.time_resolution)
+        self.variable = self.variable.isel(
+            dayofyear=slice(
+                2, len(self.variable.dayofyear) - 1, self.config.time_resolution
+            )
         )
 
     def _get_min_max_data(self):
@@ -244,8 +251,8 @@ class DatasetHandler(ABC):
         ) is None, "the min and max of the data are already defined."
         assert self.config.path_load_experiment is None, "A model is already loaded."
 
-        self.max_data = self.data.max(dim=["location"])
-        self.min_data = self.data.min(dim=["location"])
+        self.max_data = self.variable.max(dim=["location"])
+        self.min_data = self.variable.min(dim=["location"])
         # Save min_data and max_data
         if not min_max_data_path.exists():
             min_max_data = xr.Dataset(
@@ -253,7 +260,7 @@ class DatasetHandler(ABC):
                     "max_data": self.max_data,
                     "min_data": self.min_data,
                 },
-                coords={"dayofyear": self.data.coords["dayofyear"].values},
+                coords={"dayofyear": self.variable.coords["dayofyear"].values},
             )
             min_max_data.to_zarr(min_max_data_path)
             printt("Min and max data saved.")
@@ -270,9 +277,11 @@ class DatasetHandler(ABC):
 
     def _scale_data(self):
         self._get_min_max_data()
-        self.data = (self.min_data - self.data) / (self.max_data - self.min_data) + 1e-8
-        self.data = self.data.chunk(
-            {"dayofyear": len(self.data.dayofyear), "location": 1}
+        self.variable = (self.min_data - self.variable) / (
+            self.max_data - self.min_data
+        ) + 1e-8
+        self.variable = self.data.chunk(
+            {"dayofyear": len(self.variable.dayofyear), "location": 1}
         )
         printt("Data are scaled between 0 and 1.")
 

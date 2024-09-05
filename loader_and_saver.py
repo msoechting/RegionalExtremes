@@ -172,3 +172,19 @@ class Saver:
             )
         boxes_indices.to_zarr(bins_path)
         printt("Boxes computed and saved.")
+
+    def _save_extremes(self, extremes):
+        """Saves the extremes quantile to a file."""
+
+        # Unstack location for longitude and latitude as dimensions
+        extremes = extremes.set_index(location=["longitude", "latitude"]).unstack(
+            "location"
+        )
+
+        extremes_path = self.config.saving_path / "extremes.zarr"
+        if os.path.exists(bins_path):
+            raise FileExistsError(
+                f"The file {extremes_path} already exists. Rewriting is not allowed."
+            )
+        extremes.to_zarr(extremes_path)
+        printt("Boxes computed and saved.")

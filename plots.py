@@ -199,10 +199,8 @@ class PlotExtremes(InitializationConfig):
     def map_modis(self):
         "Map vegetation index per month of modis."
 
-        dataset_processor = create_handler(
-            config=self.config, n_samples=None, scale=False
-        )
-        data = dataset_processor.preprocess_data().EVIgapfilled_QCdyn
+        dataset_processor = create_handler(config=self.config, n_samples=None)
+        data = dataset_processor.preprocess_data(scale=False).EVIgapfilled_QCdyn
 
         data = data.sel(
             time=slice(datetime.date(2018, 1, 1), datetime.date(2018, 12, 31))
@@ -273,10 +271,8 @@ class PlotExtremes(InitializationConfig):
     def map_modis_slidder(self):
         "Map modis with a slidder. In progress do not work."
         initial_day = 0
-        dataset_processor = create_handler(
-            config=self.config, n_samples=10, scale=False
-        )
-        data = dataset_processor.preprocess_data().msc
+        dataset_processor = create_handler(config=self.config, n_samples=10)
+        data = dataset_processor.preprocess_data(scale=False).msc
         data = data.set_index(location=["longitude", "latitude"]).unstack("location")
         # Set up the map projection
         projection = cartopy.crs.PlateCarree()
@@ -759,15 +755,16 @@ class PlotExtremes(InitializationConfig):
 if __name__ == "__main__":
     args = parser_arguments().parse_args()
 
-    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-09-04_15:18:47_eco_50bins"
+    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-09-05_11:55:39_eco_kpca"
     config = InitializationConfig(args)
     # loader = Loader(config)
     # print(loader._load_pca_matrix().explained_variance_ratio_)
     # limits_bins = loader._load_limits_bins()
     # print(limits_bins)
     plot = PlotExtremes(config=config)
-
-    # plot.map_bins()
+    plot.map_component()
+    plot.plot_3D_pca()
+    plot.map_bins()
 
     plot.plot_2D_component()
 
@@ -793,8 +790,6 @@ if __name__ == "__main__":
     # indices = np.array([12, 1, 1])
     # plot.region(indices=indices)
     plot.distribution_per_region()
-    # plot.map_component()
-    # plot.plot_3D_pca()
 
     plot.region_distribution()
     # plot.map_modis()
