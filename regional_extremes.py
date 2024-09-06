@@ -15,6 +15,8 @@ import sys
 import os
 from sklearn.neighbors import NearestNeighbors
 
+import matplotlib.pyplot as plt
+
 
 from utils import initialize_logger, printt, raiset, int_or_none
 from loader_and_saver import Loader, Saver
@@ -181,16 +183,16 @@ class RegionalExtremes:  # (InitializationConfig):
         pca_components = self.pca.fit_transform(scaled_data)
 
         if isinstance(self.pca, PCA):
-            print(
+            printt(
                 f"PCA performed. Sum of explained variance: {sum(self.pca.explained_variance_ratio_)}. "
                 f"Explained variance ratio: {self.pca.explained_variance_ratio_}"
             )
         elif isinstance(self.pca, KernelPCA):
-            print(
+            printt(
                 "KernelPCA performed. Explained variance ratio is not available for KernelPCA."
             )
         else:
-            print("Unknown PCA type.")
+            printt("Unknown PCA type.")
 
         # Save the PCA model
         pca_path = self.config.saving_path / "pca_matrix.pkl"
@@ -346,20 +348,21 @@ class RegionalExtremes:  # (InitializationConfig):
         )
 
         # Create a new DataArray to store the quantile values (0.025 or 0.975) for extreme values
-        quantile_values = xr.full_like(data, np.nan)
+        quantile_array = xr.full_like(data, np.nan)
 
         for unique_bin in unique_bins:
             mask = np.all(self.bins.values.T == unique_bin[:, np.newaxis], axis=0)
 
             # Get the lat and lon values where the mask is true
-            masked_lons = self.bins.longitude.values[mask]
-            masked_lats = self.bins.latitude.values[mask]
-            masked_lons_lats = list(zip(masked_lons, masked_lats))
+            # masked_lons = self.bins.longitude.values[mask]
+            # masked_lats = self.bins.latitude.values[mask]
+            # masked_lons_lats = list(zip(masked_lons, masked_lats))
 
             subset_data = data.isel(location=mask)
             subset_msc = msc.isel(location=mask)
+            subset_quantiles_array = quantile_array.isel(location=mask)
 
-            # Remove the MSC for each samples
+            # Deseasonalized each region
             if subset_data.shape[0] > 0:
                 print("new region")
                 # Extract day of year from subset_data
@@ -368,6 +371,7 @@ class RegionalExtremes:  # (InitializationConfig):
                 aligned_msc = subset_msc.sel(dayofyear=subset_data["dayofyear"])
                 # Subtract the seasonal cycle
                 deseasonalized = subset_data - aligned_msc
+
                 deseasonalized = deseasonalized.chunk(
                     {
                         "time": len(deseasonalized.time),
@@ -383,103 +387,33 @@ class RegionalExtremes:  # (InitializationConfig):
                 # Assign quantile levels to each value
                 for i, level in enumerate(quantile_levels):
                     if i == 0:
-                        print(deseasonalized.values.shape)
-                        print(quantiles.sel(quantile=level).values)
-                        print(
-                            (
-                                deseasonalized < quantiles.sel(quantile=level).values
-                            ).shape
-                        )
                         # Values below the lowest quantile
-                        quantile_values = quantile_values.assign(
-                            location=xr.where(
-                                deseasonalized < quantiles.sel(quantile=level).values,
-                                level,
-                                quantile_values.sel(location=deseasonalized.location),
-                            )
+                        subset_quantiles_array = xr.where(
+                            deseasonalized < quantiles.sel(quantile=level),
+                            level,
+                            subset_quantiles_array,
                         )
                     elif i == len(quantile_levels) - 1:
                         # Values above the highest quantile
-                        quantile_values = xr.where(
-                            deseasonalized >= quantiles.sel(quantile=level).values,
+                        subset_quantiles_array = xr.where(
+                            deseasonalized > quantiles.sel(quantile=level).values,
                             level,
-                            quantile_values,
+                            subset_quantiles_array,
                         )
+                    elif i == 3:
+                        pass
                     else:
                         # Values between quantiles
                         lower_level = quantile_levels[i - 1]
-                        quantile_values = xr.where(
+                        subset_quantiles_array = xr.where(
                             (
                                 deseasonalized
                                 >= quantiles.sel(quantile=lower_level).values
                             )
                             & (deseasonalized < quantiles.sel(quantile=level)).values,
                             level,
-                            quantile_values,
+                            subset_quantiles_array,
                         )
-
-                # Define the colormap for different quantile levels
-                colors = {
-                    0.025: "blue",  # Color for below the 0.025 quantile
-                    0.975: "red",  # Color for above the 0.975 quantile
-                    # Add more color mappings as needed for other quantile levels
-                }
-
-                # Create a base figure
-                plt.figure(figsize=(10, 6))
-
-                plt.plot(
-                    subset_data["time"],
-                    subset_data,
-                    label="Original Data",
-                    color="blue",
-                )
-
-                # Plot the deseasonalized data
-                plt.plot(
-                    subset_data["time"],
-                    deseasonalized,
-                    label="Deseasonalized Data",
-                    color="black",
-                    zorder=1,
-                )
-
-                # Loop over time intervals and apply color spans for extreme quantiles
-                for i in range(len(subset_data["time"]) - 1):
-                    # Check the quantile value at each time step
-                    quantile_level = quantile_values[i]
-
-                    # If the quantile level corresponds to one of the defined extremes (e.g., 0.025 or 0.975)
-                    if quantile_level in colors:
-                        # Highlight the time span between two time points
-                        plt.axvspan(
-                            subset_data["time"].values[i],  # Start of the time interval
-                            subset_data["time"].values[
-                                i + 1
-                            ],  # End of the time interval
-                            color=colors[
-                                quantile_level
-                            ],  # Color based on the quantile level
-                            alpha=0.3,  # Transparency of the shaded region
-                        )
-
-                # Add title and labels
-                plt.title("Deseasonalized Data with Extreme Quantile Color Coding")
-                plt.xlabel("Time")
-                plt.ylabel("Deseasonalized Values")
-
-                # Add legend manually for quantile colors
-                handles = [
-                    plt.Line2D([0], [0], color=color, lw=4) for color in colors.values()
-                ]
-                labels = [f"Quantile {level}" for level in colors.keys()]
-                plt.legend(handles, labels)
-
-                # Show the plot
-                plt.savefig(
-                    "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-09-04_15:18:47_eco_50bins/EVI/plots/extremes.png"
-                )
-                sys.exit()
 
         self.saver_save_extremes(quantile_values)
 

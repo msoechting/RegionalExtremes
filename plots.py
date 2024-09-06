@@ -751,6 +751,79 @@ class PlotExtremes(InitializationConfig):
 
         pass
 
+    def threshold_time_serie(self):
+        # quantile_array = quantile_array.where(mask, subset_quantiles_array)
+        # quantile_array.isel(location=mask) = subset_quantiles_array
+        # Define the colormap for different quantile levels
+        colors = {
+            0.025: "blue",  # Color for below the 0.025 quantile
+            0.975: "red",  # Color for above the 0.975 quantile
+            # Add more color mappings as needed for other quantile levels
+        }
+
+        # Create a base figure
+        plt.figure(figsize=(10, 6))
+        subset_data = subset_data[0, :]
+
+        plt.plot(
+            subset_data["time"],
+            subset_data,
+            label="Original Data",
+            color="black",
+        )
+
+        # Plot the deseasonalized data
+        plt.plot(
+            subset_data["time"],
+            deseasonalized[0, :],
+            label="Deseasonalized Data",
+            color="black",
+            zorder=1,
+        )
+        plt.scatter(
+            subset_data["time"],
+            subset_quantiles_array[0, :],
+            label="Quantiles",
+            color="red",
+            s=20,
+        )
+
+        # Loop over time intervals and apply color spans for extreme quantiles
+        # for i in range(len(subset_data["time"]) - 1):
+        #    # Check the quantile value at each time step
+        #    quantile_level = quantile_values[i]
+        #
+        #    # If the quantile level corresponds to one of the defined extremes (e.g., 0.025 or 0.975)
+        #    if quantile_level in colors:
+        #        # Highlight the time span between two time points
+        #        plt.axvspan(
+        #            subset_data["time"].values[i],  # Start of the time interval
+        #            subset_data["time"].values[
+        #                i + 1
+        #            ],  # End of the time interval
+        #            color=colors[
+        #                quantile_level
+        #            ],  # Color based on the quantile level
+        #            alpha=0.3,  # Transparency of the shaded region
+        #        )
+        #
+        ## Add title and labels
+        plt.title("Deseasonalized Data with Extreme Quantile Color Coding")
+        plt.xlabel("Time")
+        plt.ylabel("Deseasonalized Values")
+
+        # Add legend manually for quantile colors
+        # handles = [
+        #     plt.Line2D([0], [0], color=color, lw=4) for color in colors.values()
+        # ]
+        # labels = [f"Quantile {level}" for level in colors.keys()]
+        plt.legend()
+
+        # Show the plot
+        plt.savefig(
+            "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-09-04_15:18:47_eco_50bins/EVI/plots/extremes.png"
+        )
+
 
 if __name__ == "__main__":
     args = parser_arguments().parse_args()
