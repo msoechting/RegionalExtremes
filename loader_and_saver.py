@@ -182,7 +182,7 @@ class Saver:
         )
 
         extremes_path = self.config.saving_path / "extremes.zarr"
-        if os.path.exists(bins_path):
+        if os.path.exists(extremes_path):
             raise FileExistsError(
                 f"The file {extremes_path} already exists. Rewriting is not allowed."
             )

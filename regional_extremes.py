@@ -347,16 +347,14 @@ class RegionalExtremes:  # (InitializationConfig):
         unique_bins, counts = np.unique(self.bins.values, axis=0, return_counts=True)
 
         # Create a new DataArray to store the quantile values (0.025 or 0.975) for extreme values
-        quantile_array = xr.full_like(data, np.nan)
+        quantile_array = xr.full_like(deseasonalized, np.nan)
 
         for unique_bin in unique_bins:
             mask = np.all(self.bins.values.T == unique_bin[:, np.newaxis], axis=0)
-            deseasonalized = deseasonalized.isel(location=mask)
-            printt("before operation")
-            A = self._assign_quantile_levels(deseasonalized)
-            printt("computed")
-
-            quantile_array.loc[dict(location=mask)] = A
+            region = deseasonalized.isel(location=mask)
+            quantile_array.loc[dict(location=region.location)] = (
+                self._assign_quantile_levels(region)
+            )
 
         self.saver._save_extremes(quantile_array)
 
