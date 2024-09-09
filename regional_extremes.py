@@ -338,109 +338,27 @@ class RegionalExtremes:  # (InitializationConfig):
         )
 
     def apply_threshold(self):
-        unique_bins, counts = np.unique(self.bins.values, axis=0, return_counts=True)
-
         dataset_processor = create_handler(config=config, n_samples=100)
         msc, data = dataset_processor.preprocess_data(
             scale=False, return_time_serie=True, reduce_temporal_resolution=False
         )
+        deseasonalized = self._deseasonalize(data, msc)
         self.bins = self.bins.sel(location=data.location)
+        unique_bins, counts = np.unique(self.bins.values, axis=0, return_counts=True)
 
         # Create a new DataArray to store the quantile values (0.025 or 0.975) for extreme values
         quantile_array = xr.full_like(data, np.nan)
 
         for unique_bin in unique_bins:
             mask = np.all(self.bins.values.T == unique_bin[:, np.newaxis], axis=0)
+            deseasonalized = deseasonalized.isel(location=mask)
+            printt("before operation")
+            A = self._assign_quantile_levels(deseasonalized)
+            printt("computed")
 
-            # Get the lat and lon values where the mask is true
-            # masked_lons = self.bins.longitude.values[mask]
-            # masked_lats = self.bins.latitude.values[mask]
-            # masked_lons_lats = list(zip(masked_lons, masked_lats))
+            quantile_array.loc[dict(location=mask)] = A
 
-            subset_data = data.isel(location=mask)
-            subset_msc = msc.isel(location=mask)
-            subset_quantiles_array = quantile_array.isel(location=mask)
-
-            # Deseasonalized each region
-            if subset_data.shape[0] > 0:
-                print("new region")
-                deseasonalized = self._deseasonalize(subset_data, subset_msc)
-
-                subset_quantiles_array = self._assign_quantile_levels(deseasonalized)
-                # quantile_array = quantile_array.where(mask, subset_quantiles_array)
-                # quantile_array.isel(location=mask) = subset_quantiles_array
-                # Define the colormap for different quantile levels
-                colors = {
-                    0.025: "blue",  # Color for below the 0.025 quantile
-                    0.975: "red",  # Color for above the 0.975 quantile
-                    # Add more color mappings as needed for other quantile levels
-                }
-
-                # Create a base figure
-                plt.figure(figsize=(10, 6))
-                subset_data = subset_data[0, :]
-
-                plt.plot(
-                    subset_data["time"],
-                    subset_data,
-                    label="Original Data",
-                    color="black",
-                )
-
-                # Plot the deseasonalized data
-                plt.plot(
-                    subset_data["time"],
-                    deseasonalized[0, :],
-                    label="Deseasonalized Data",
-                    color="black",
-                    zorder=1,
-                )
-                plt.scatter(
-                    subset_data["time"],
-                    subset_quantiles_array[0, :],
-                    label="Quantiles",
-                    color="red",
-                    s=20,
-                )
-
-                # Loop over time intervals and apply color spans for extreme quantiles
-                # for i in range(len(subset_data["time"]) - 1):
-                #    # Check the quantile value at each time step
-                #    quantile_level = quantile_values[i]
-                #
-                #    # If the quantile level corresponds to one of the defined extremes (e.g., 0.025 or 0.975)
-                #    if quantile_level in colors:
-                #        # Highlight the time span between two time points
-                #        plt.axvspan(
-                #            subset_data["time"].values[i],  # Start of the time interval
-                #            subset_data["time"].values[
-                #                i + 1
-                #            ],  # End of the time interval
-                #            color=colors[
-                #                quantile_level
-                #            ],  # Color based on the quantile level
-                #            alpha=0.3,  # Transparency of the shaded region
-                #        )
-                #
-                ## Add title and labels
-                plt.title("Deseasonalized Data with Extreme Quantile Color Coding")
-                plt.xlabel("Time")
-                plt.ylabel("Deseasonalized Values")
-
-                # Add legend manually for quantile colors
-                # handles = [
-                #     plt.Line2D([0], [0], color=color, lw=4) for color in colors.values()
-                # ]
-                # labels = [f"Quantile {level}" for level in colors.keys()]
-                plt.legend()
-
-                # Show the plot
-                plt.savefig(
-                    "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-09-04_15:18:47_eco_50bins/EVI/plots/extremes.png"
-                )
-                sys.exit()
-
-        self.saver_save_extremes(quantile_values)
+        self.saver._save_extremes(quantile_array)
 
     def _deseasonalize(self, subset_data, subset_msc):
         # Extract day of year from subset_data
@@ -449,23 +367,23 @@ class RegionalExtremes:  # (InitializationConfig):
         aligned_msc = subset_msc.sel(dayofyear=subset_data["dayofyear"])
         # Subtract the seasonal cycle
         deseasonalized = subset_data - aligned_msc
+        deseasonalized = deseasonalized.isel(
+            time=slice(2, len(deseasonalized.time) - 1, 5)
+        )
         deseasonalized = deseasonalized.chunk(
-            {
-                "time": len(deseasonalized.time),
-                "location": len(deseasonalized.location),
-            }
+            {"time": len(deseasonalized.time) // 10, "location": 100}
         )
         return deseasonalized
 
     def _assign_quantile_levels(self, deseasonalized):
         # Compute the quantiles for all levels across time and location
-        lower_quantiles = deseasonalized.quantile(
+        lower_quantiles = deseasonalized.chunk(dict(time=-1)).quantile(
             LOWER_QUANTILES_LEVEL, dim=["time", "location"]
-        ).values
+        )
 
-        upper_quantiles = deseasonalized.quantile(
+        upper_quantiles = deseasonalized.chunk(dict(time=-1)).quantile(
             UPPER_QUANTILES_LEVEL, dim=["time", "location"]
-        ).values
+        )
 
         # Create a mask for each quantile level, the one of the middle (between e.g 0.05 and 0.95) stay NaN.
         masks = (
@@ -482,14 +400,45 @@ class RegionalExtremes:  # (InitializationConfig):
             ]
             + [deseasonalized > upper_quantiles[-1]]
         )
+        quantile_levels = np.concatenate((LOWER_QUANTILES_LEVEL, UPPER_QUANTILES_LEVEL))
 
-        quantile_levels = np.concatenate(LOWER_QUANTILES_LEVEL, UPPER_QUANTILES_LEVEL)
-        # Use np.select to assign levels based on masks
-        return xr.DataArray(
-            np.select(masks, quantile_levels),
-            coords=deseasonalized.coords,
-            dims=deseasonalized.dims,
-        )
+        # Compute xarray mask with the quantiles
+        result = xr.full_like(deseasonalized.astype(float), np.nan)
+        for i, mask in enumerate(masks):
+            result = xr.where(mask, quantile_levels[i], result)
+        return result
+
+
+def fake_xarray():
+    # Define time range
+    time = pd.date_range("2000-01-01T12:00:00", "2000-12-30T12:00:00", periods=365)
+
+    # Define the coordinates
+    longitude = -0.625
+    latitude = 46.63
+
+    # Create a MultiIndex for location (dummy index with one element)
+    location = pd.MultiIndex.from_tuples([("location_1",)], names=["loc_id"])
+
+    # Create the data using NumPy
+    days = np.arange(0, 365)
+    data = np.sin(2 * np.pi * days / 365).astype(np.float32)
+    dayofyear = time.dayofyear
+
+    # Create the xarray DataArray
+    fake_xarray = xr.DataArray(
+        data,
+        dims=["location", "time"],
+        coords={
+            "time": time,
+            "longitude": ("longitude", [longitude]),
+            "latitude": ("latitude", [latitude]),
+            "dayofyear": ("time", dayofyear),
+        },
+        name="EVIgapfilled_QCdyn",
+    )
+    fake_xarray = fake_xarray.stack(location=("longitude", "latitude"))
+    return fake_xarray
 
 
 if __name__ == "__main__":
@@ -498,7 +447,7 @@ if __name__ == "__main__":
     args.index = "EVI"
     args.k_pca = False
     args.n_samples = 10
-    args.n_components = 3
+    args.n_components = 2
     args.n_bins = 50
     args.compute_variance = False
 
@@ -514,6 +463,8 @@ if __name__ == "__main__":
         n_bins=args.n_bins,
     )
 
+    # extremes_processor._assign_quantile_levels(fake_xarray())
+    # sys.exit()
     # Load a subset of the dataset and fit the PCA
     if config.path_load_experiment is None:
         # Initialization of the climatic or ecological DatasetHandler
