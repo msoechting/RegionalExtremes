@@ -200,7 +200,7 @@ class PlotExtremes(InitializationConfig):
         "Map vegetation index per month of modis."
 
         dataset_processor = create_handler(config=self.config, n_samples=None)
-        data = dataset_processor.preprocess_data(scale=False).EVIgapfilled_QCdyn
+        data = dataset_processor.preprocess_data(scale=False, remove_nan=False).EVIgapfilled_QCdyn
 
         data = data.sel(
             time=slice(datetime.date(2018, 1, 1), datetime.date(2018, 12, 31))

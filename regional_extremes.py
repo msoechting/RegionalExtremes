@@ -338,50 +338,71 @@ class RegionalExtremes:  # (InitializationConfig):
         )
 
     def apply_threshold(self):
-        dataset_processor = create_handler(config=config, n_samples=100)
+        """Compute and save a xarray (location, time) indicating the quantiles of extremes."""
+        # Load the data
+        dataset_processor = create_handler(config=config, n_samples=None)
         msc, data = dataset_processor.preprocess_data(
-            scale=False, return_time_serie=True, reduce_temporal_resolution=False
+            scale=False,
+            return_time_serie=True,
+            reduce_temporal_resolution=False,
+            remove_nan=False,
         )
+        # Deseasonalized data
         deseasonalized = self._deseasonalize(data, msc)
-        self.bins = self.bins.sel(location=data.location)
-        unique_bins, counts = np.unique(self.bins.values, axis=0, return_counts=True)
+
+        # Get unique id for each region
+        unique_regions, counts = np.unique(self.bins.values, axis=0, return_counts=True)
 
         # Create a new DataArray to store the quantile values (0.025 or 0.975) for extreme values
-        quantile_array = xr.full_like(deseasonalized, np.nan)
+        quantile_array = xr.full_like(deseasonalized.astype(float), np.nan)
 
-        for unique_bin in unique_bins:
-            mask = np.all(self.bins.values.T == unique_bin[:, np.newaxis], axis=0)
-            region = deseasonalized.isel(location=mask)
+        # Loop to compute threshold on each threshold
+        for unique_region in unique_regions:
+            # Mask to get the location of a unique region
+            mask = self.bins.isel(
+                location=np.all(self.bins.values.T == unique_bin[:, np.newaxis], axis=0)
+            ).location
+            region = deseasonalized.sel(location=mask)
+
+            # Compute threshold on a single region
+            subset_region_quantile_array = self._assign_quantile_levels(region)
+
+            # Rechunk necessary??? quantile_array seems to have 1 chunks per location and time (i don't know why)
+            quantile_array = quantile_array.chunk({"location": 100})
+
+            # Fill the full xarray. This line is very slow or/and never finish
             quantile_array.loc[dict(location=region.location)] = (
-                self._assign_quantile_levels(region)
+                subset_region_quantile_array
             )
+            printt("after loc")
 
         self.saver._save_extremes(quantile_array)
 
     def _deseasonalize(self, subset_data, subset_msc):
-        # Extract day of year from subset_data
-        subset_data["dayofyear"] = subset_data["time.dayofyear"]
         # Align subset_msc with subset_data
-        aligned_msc = subset_msc.sel(dayofyear=subset_data["dayofyear"])
+        aligned_msc = subset_msc.sel(dayofyear=subset_data["time.dayofyear"])
         # Subtract the seasonal cycle
         deseasonalized = subset_data - aligned_msc
         deseasonalized = deseasonalized.isel(
             time=slice(2, len(deseasonalized.time) - 1, 5)
         )
-        deseasonalized = deseasonalized.chunk(
-            {"time": len(deseasonalized.time) // 10, "location": 100}
-        )
+        # deseasonalized = deseasonalized.chunk(
+        #    {"time": len(deseasonalized.time) // 10, "location": 100}
+        # )
         return deseasonalized
 
     def _assign_quantile_levels(self, deseasonalized):
         # Compute the quantiles for all levels across time and location
-        lower_quantiles = deseasonalized.chunk(dict(time=-1)).quantile(
+        deseasonalized = deseasonalized.chunk("auto")  # dict(location=20, time=-1))
+        lower_quantiles = deseasonalized.quantile(
             LOWER_QUANTILES_LEVEL, dim=["time", "location"]
         )
-
-        upper_quantiles = deseasonalized.chunk(dict(time=-1)).quantile(
+        upper_quantiles = deseasonalized.quantile(
             UPPER_QUANTILES_LEVEL, dim=["time", "location"]
         )
+        # deseasonalized = deseasonalized.chunk(
+        #     dict(location=20, time=len(deseasonalized.time) // 10)
+        # )
 
         # Create a mask for each quantile level, the one of the middle (between e.g 0.05 and 0.95) stay NaN.
         masks = (
@@ -441,13 +462,13 @@ def fake_xarray():
 
 if __name__ == "__main__":
     args = parser_arguments().parse_args()
-    args.name = "eco_threshold"
-    args.index = "EVI"
-    args.k_pca = False
-    args.n_samples = 10
-    args.n_components = 2
-    args.n_bins = 50
-    args.compute_variance = False
+    # args.name = "eco_threshold"
+    # args.index = "EVI"
+    # args.k_pca = False
+    # args.n_samples = 1000
+    # args.n_components = 2
+    # args.n_bins = 50
+    # args.compute_variance = False
 
     args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-09-04_15:18:47_eco_50bins"
 
@@ -461,8 +482,6 @@ if __name__ == "__main__":
         n_bins=args.n_bins,
     )
 
-    # extremes_processor._assign_quantile_levels(fake_xarray())
-    # sys.exit()
     # Load a subset of the dataset and fit the PCA
     if config.path_load_experiment is None:
         # Initialization of the climatic or ecological DatasetHandler
@@ -481,7 +500,7 @@ if __name__ == "__main__":
         dataset_processor = create_handler(
             config=config, n_samples=None
         )  # all the dataset
-        data = dataset_processor.preprocess_data()
+        data = dataset_processor.preprocess_data(remove_nan=True)
         extremes_processor.apply_pca(scaled_data=data)
 
     # Define the boundaries of the bins

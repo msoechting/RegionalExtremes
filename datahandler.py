@@ -60,7 +60,7 @@ class DatasetHandler(ABC):
         self.variable = None
 
     def preprocess_data(
-        self, scale=True, reduce_temporal_resolution=True, return_time_serie=False
+        self, scale=True, reduce_temporal_resolution=True, return_time_serie=False, remove_nan=True
     ):
         """
         Preprocess data based on the index.
@@ -84,7 +84,7 @@ class DatasetHandler(ABC):
         if reduce_temporal_resolution:
             self._reduce_temporal_resolution()
 
-        if not self.n_samples:
+        if remove_nan and ~self.n_samples:
             self._remove_nans()
 
         if scale:
@@ -168,10 +168,6 @@ class DatasetHandler(ABC):
                 "Number of samples != n_samples. The number of samples without NaNs is likely too low, increase the factor of n_candidates."
             )
         printt(f"Randomly selected {self.data.sizes['location']} samples for training.")
-
-    def _is_not_nan(self, lon, lat):
-        data_location = self.data[self.variable_name].sel(longitude=lon, latitude=lat)
-        return ~np.isnan(data_location).any().values
 
     def _is_in_europe(self, lon, lat):
         """
@@ -275,12 +271,12 @@ class DatasetHandler(ABC):
         self.min_data = min_max_data.min_data
         self.max_data = min_max_data.max_data
 
-    def _scale_data(self):
+    def _scale_variable(self):
         self._get_min_max_data()
         self.variable = (self.min_data - self.variable) / (
             self.max_data - self.min_data
         ) + 1e-8
-        self.variable = self.data.chunk(
+        self.variable = self.variable.chunk(
             {"dayofyear": len(self.variable.dayofyear), "location": 1}
         )
         printt("Data are scaled between 0 and 1.")
