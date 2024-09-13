@@ -358,17 +358,22 @@ class RegionalExtremes:  # (InitializationConfig):
 
         # Loop to compute threshold on each threshold
         for unique_region in unique_regions:
+            print("region: ", unique_region)
             # Mask to get the location of a unique region
             mask = self.bins.isel(
-                location=np.all(self.bins.values.T == unique_bin[:, np.newaxis], axis=0)
+                location=np.all(
+                    self.bins.values.T == unique_region[:, np.newaxis], axis=0
+                )
             ).location
             region = deseasonalized.sel(location=mask)
 
             # Compute threshold on a single region
-            subset_region_quantile_array = self._assign_quantile_levels(region)
-
+            subset_region_quantile_array = self._assign_quantile_levels(
+                region
+            ).compute()
+            print("computed!")
             # Rechunk necessary??? quantile_array seems to have 1 chunks per location and time (i don't know why)
-            quantile_array = quantile_array.chunk({"location": 100})
+            quantile_array = quantile_array.chunk({"location": 20})
 
             # Fill the full xarray. This line is very slow or/and never finish
             quantile_array.loc[dict(location=region.location)] = (
