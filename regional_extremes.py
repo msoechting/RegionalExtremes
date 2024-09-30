@@ -349,16 +349,35 @@ class RegionalExtremes:  # (InitializationConfig):
         )
         # Deseasonalized data
         deseasonalized = self._deseasonalize(data, msc)
+        deseasonalized = deseasonalized.chunk("auto")
+
+        # self.bins = self.bins.sel(location=deseasonalized.location)
 
         # Get unique id for each region
         unique_regions, counts = np.unique(self.bins.values, axis=0, return_counts=True)
+        # grouped = deseasonalized.groupby(self.bins.values)
 
         # Create a new DataArray to store the quantile values (0.025 or 0.975) for extreme values
         quantile_array = xr.full_like(deseasonalized.astype(float), np.nan)
+        print(quantile_array)
 
-        # Loop to compute threshold on each threshold
-        for unique_region in unique_regions:
+        # def compute_quantile(region):
+        #    # Apply your quantile computation function for the region
+        #    return self._assign_quantile_levels(region).compute()
+        #
+        # quantile_array = grouped.map(compute_quantile, dask="parallelized")
+        # print(quantile_array)
+        # print(self.bins)
+        # self.bins = self.bins.unstack("location")
+        # deseasonalized = deseasonalized.unstack("location")
+        # self.bins = self.bins.groupby()
+        # grouped = deseasonalized.groupby(self.bins)
+        # print(grouped)
+
+        ## Loop to compute threshold on each threshold
+        for unique_region in unique_regions:  # [:2]:
             # Mask to get the location of a unique region
+            printt(unique_region)
             mask = self.bins.isel(
                 location=np.all(
                     self.bins.values.T == unique_region[:, np.newaxis], axis=0
@@ -370,18 +389,15 @@ class RegionalExtremes:  # (InitializationConfig):
             subset_region_quantile_array = self._assign_quantile_levels(
                 region
             ).compute()
-            print("computed!")
-
-            # Fill the full xarray. This line is very slow or/and never finish
+            # Fill the full xarray.
             quantile_array.loc[dict(location=region.location)] = (
                 subset_region_quantile_array
             )
-            printt("after loc")
-
+        printt(quantile_array)
         self.saver._save_extremes(quantile_array)
 
     def _deseasonalize(self, subset_data, subset_msc):
-        # Align subset_msc with subset_data
+        # Align subset_msc with subset_data/Net/Groups/BGI/scratch/crobin/miniconda3/envs/ExtremesEnv2/bin/python /Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/RegionalExtremesPackage/regional_extremes.py
         aligned_msc = subset_msc.sel(dayofyear=subset_data["time.dayofyear"])
         # Subtract the seasonal cycle
         deseasonalized = subset_data - aligned_msc
@@ -396,10 +412,10 @@ class RegionalExtremes:  # (InitializationConfig):
     def _assign_quantile_levels(self, deseasonalized):
         # Compute the quantiles for all levels across time and location
         deseasonalized = deseasonalized.chunk("auto")  # dict(location=20, time=-1))
-        lower_quantiles = deseasonalized.nanquantile(
+        lower_quantiles = deseasonalized.quantile(
             LOWER_QUANTILES_LEVEL, dim=["time", "location"]
         )
-        upper_quantiles = deseasonalized.nanquantile(
+        upper_quantiles = deseasonalized.quantile(
             UPPER_QUANTILES_LEVEL, dim=["time", "location"]
         )
         # deseasonalized = deseasonalized.chunk(

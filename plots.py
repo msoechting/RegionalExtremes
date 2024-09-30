@@ -200,7 +200,9 @@ class PlotExtremes(InitializationConfig):
         "Map vegetation index per month of modis."
 
         dataset_processor = create_handler(config=self.config, n_samples=None)
-        data = dataset_processor.preprocess_data(scale=False, remove_nan=False).EVIgapfilled_QCdyn
+        data = dataset_processor.preprocess_data(
+            scale=False, remove_nan=False
+        ).EVIgapfilled_QCdyn
 
         data = data.sel(
             time=slice(datetime.date(2018, 1, 1), datetime.date(2018, 12, 31))
@@ -824,22 +826,67 @@ class PlotExtremes(InitializationConfig):
             "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-09-04_15:18:47_eco_50bins/EVI/plots/extremes.png"
         )
 
+    def extremes_plots(self, date):
+        extremes = self.loader._load_extremes()
+        print(extremes)
+        # Set up the map projection
+        projection = cartopy.crs.PlateCarree()
+        data_day = extremes.sel(time=f"{date}T12:00:00.000000000")
+
+        fig, ax = plt.subplots(
+            figsize=(12, 5),
+            subplot_kw={"projection": projection},
+        )
+        # adjust the plot
+        plt.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05)
+        # Add coastlines and set global extent
+        ax.coastlines()
+        # ax.add_feature(cartopy.feature.OCEAN, zorder=100, edgecolor="k")
+        # Plot the RGB data
+        img_extent = (
+            data_day.longitude.min(),
+            data_day.longitude.max(),
+            data_day.latitude.min(),
+            data_day.latitude.max(),
+        )
+        ax.set_extent(img_extent, crs=projection)
+        print(data_day)
+        im = ax.pcolormesh(
+            data_day.longitude.values,
+            data_day.latitude.values,
+            data_day.values,
+            transform=projection,
+            cmap="viridis",
+            vmin=-0.15,
+            vmax=0.15,
+        )
+        # Add a colorbar
+        cbar = plt.colorbar(im, ax=ax, orientation="vertical", pad=0.08)
+        cbar.set_label(f"{self.config.index} Extremes")
+        # Add a title
+        title = ax.set_title(f"Regional extremes {date}")
+        map_saving_path = self.saving_path / f"extremes_{date}.png"
+        plt.savefig(map_saving_path)
+        printt("Plot saved")
+        # Show the plot
+        plt.show()
+
 
 if __name__ == "__main__":
     args = parser_arguments().parse_args()
 
-    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-09-05_11:55:39_eco_kpca"
+    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-09-04_15:18:47_eco_50bins"
     config = InitializationConfig(args)
     # loader = Loader(config)
     # print(loader._load_pca_matrix().explained_variance_ratio_)
     # limits_bins = loader._load_limits_bins()
     # print(limits_bins)
     plot = PlotExtremes(config=config)
-    plot.map_component()
-    plot.plot_3D_pca()
-    plot.map_bins()
+    # plot.map_component()
+    # plot.plot_3D_pca()
+    # plot.map_bins()
 
-    plot.plot_2D_component()
+    # plot.plot_2D_component()
 
     # plot.find_bins_origin()
 
@@ -862,7 +909,9 @@ if __name__ == "__main__":
     # plot.region(indices=indices)
     # indices = np.array([12, 1, 1])
     # plot.region(indices=indices)
-    plot.distribution_per_region()
+    # plot.distribution_per_region()
 
-    plot.region_distribution()
+    # plot.region_distribution()
     # plot.map_modis()
+
+    plot.extremes_plots("2003-08-15")
