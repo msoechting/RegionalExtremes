@@ -87,12 +87,12 @@ class Loader:
 
     def _load_extremes(self):
         """Saves the extremes quantile to a file."""
-        extremes_path = self.config.saving_path / "extremes_1.zarr"
+        extremes_path = self.config.saving_path / "extremes.zarr"
         if not os.path.exists(extremes_path):
             raise FileNotFoundError(f"The file {extremes_path} not found.")
         extremes = xr.open_zarr(extremes_path)
         # Unstack location for longitude and latitude as dimensions
-        extremes = extremes.stack(location=["longitude", "latitude"])
+        # extremes = extremes.stack(location=["longitude", "latitude"])
         printt("Extremes loaded.")
         return extremes
 

@@ -60,7 +60,11 @@ class DatasetHandler(ABC):
         self.variable = None
 
     def preprocess_data(
-        self, scale=True, reduce_temporal_resolution=True, return_time_serie=False, remove_nan=True
+        self,
+        scale=True,
+        reduce_temporal_resolution=True,
+        return_time_serie=False,
+        remove_nan=True,
     ):
         """
         Preprocess data based on the index.
@@ -280,6 +284,16 @@ class DatasetHandler(ABC):
             {"dayofyear": len(self.variable.dayofyear), "location": 1}
         )
         printt("Data are scaled between 0 and 1.")
+
+    def _deseasonalize(self, subset_data, subset_msc):
+        # Align subset_msc with subset_data
+        aligned_msc = subset_msc.sel(dayofyear=subset_data["time.dayofyear"])
+        # Subtract the seasonal cycle
+        deseasonalized = subset_data - aligned_msc
+        deseasonalized = deseasonalized.isel(
+            time=slice(2, len(deseasonalized.time) - 1, 5)
+        )
+        return deseasonalized
 
 
 class ClimaticDatasetHandler(DatasetHandler):

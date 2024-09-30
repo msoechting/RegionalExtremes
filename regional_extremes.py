@@ -131,8 +131,8 @@ class RegionalExtremes:  # (InitializationConfig):
         n_bins: int,
     ):
         """
-        Compute the regional extremes by defining boxes of similar region using a PCA computed on the mean seasonal cycle of the samples. Each values of the msc is considered
-        as an independent component.
+        Compute the regional extremes by defining boxes of similar region using a PCA computed on the mean seasonal cycle of the samples.
+        Each values of the msc is considered as an independent component.
 
         Args:
             config (InitializationConfig): Shared attributes across the classes.
@@ -166,7 +166,8 @@ class RegionalExtremes:  # (InitializationConfig):
         self,
         scaled_data,
     ):
-        """compute the principal component analysis (PCA) on the mean seasonal cycle (MSC) of n samples and scale it between 0 and 1. Each time step of the msc is considered as an independent component. nb of time_step used for the PCA computation = 366 / time_resolution.
+        """compute the principal component analysis (PCA) on the mean seasonal cycle (MSC) of n samples and scale it between 0 and 1.
+        Each time step of the msc is considered as an independent component. nb of time_step used for the PCA computation = 366 / time_resolution.
 
         Args:
             n_components (int, optional): number of components to compute the PCA. Defaults to 3.
@@ -337,77 +338,41 @@ class RegionalExtremes:  # (InitializationConfig):
             X
         )
 
-    def apply_threshold(self):
+    def apply_threshold(self, deseasonalized):
         """Compute and save a xarray (location, time) indicating the quantiles of extremes."""
-        # Load the data
-        dataset_processor = create_handler(config=config, n_samples=None)
-        msc, data = dataset_processor.preprocess_data(
-            scale=False,
-            return_time_serie=True,
-            reduce_temporal_resolution=False,
-            remove_nan=False,
-        )
-        # Deseasonalized data
-        deseasonalized = self._deseasonalize(data, msc)
-        deseasonalized = deseasonalized.chunk("auto")
 
         # self.bins = self.bins.sel(location=deseasonalized.location)
-
-        # Get unique id for each region
-        unique_regions, counts = np.unique(self.bins.values, axis=0, return_counts=True)
-        # grouped = deseasonalized.groupby(self.bins.values)
+        deseasonalized = deseasonalized.sel(location=self.bins.location)
 
         # Create a new DataArray to store the quantile values (0.025 or 0.975) for extreme values
         quantile_array = xr.full_like(deseasonalized.astype(float), np.nan)
-        print(quantile_array)
 
-        # def compute_quantile(region):
-        #    # Apply your quantile computation function for the region
-        #    return self._assign_quantile_levels(region).compute()
-        #
-        # quantile_array = grouped.map(compute_quantile, dask="parallelized")
-        # print(quantile_array)
-        # print(self.bins)
-        # self.bins = self.bins.unstack("location")
-        # deseasonalized = deseasonalized.unstack("location")
-        # self.bins = self.bins.groupby()
-        # grouped = deseasonalized.groupby(self.bins)
-        # print(grouped)
+        # Get unique id for each region
+        unique_regions, counts = np.unique(self.bins.values, axis=0, return_counts=True)
 
-        ## Loop to compute threshold on each threshold
-        for unique_region in unique_regions:  # [:2]:
-            # Mask to get the location of a unique region
-            printt(unique_region)
-            mask = self.bins.isel(
-                location=np.all(
-                    self.bins.values.T == unique_region[:, np.newaxis], axis=0
-                )
-            ).location
-            region = deseasonalized.sel(location=mask)
-
-            # Compute threshold on a single region
-            subset_region_quantile_array = self._assign_quantile_levels(
-                region
-            ).compute()
-            # Fill the full xarray.
-            quantile_array.loc[dict(location=region.location)] = (
-                subset_region_quantile_array
-            )
-        printt(quantile_array)
-        self.saver._save_extremes(quantile_array)
-
-    def _deseasonalize(self, subset_data, subset_msc):
-        # Align subset_msc with subset_data/Net/Groups/BGI/scratch/crobin/miniconda3/envs/ExtremesEnv2/bin/python /Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/RegionalExtremesPackage/regional_extremes.py
-        aligned_msc = subset_msc.sel(dayofyear=subset_data["time.dayofyear"])
-        # Subtract the seasonal cycle
-        deseasonalized = subset_data - aligned_msc
-        deseasonalized = deseasonalized.isel(
-            time=slice(2, len(deseasonalized.time) - 1, 5)
+        # Create a DataArray of region labels
+        region_labels = xr.DataArray(
+            np.argmax(
+                np.all(
+                    self.bins.values[:, :, None] == unique_regions.T[None, :, :], axis=1
+                ),
+                axis=1,
+            ),
+            dims=("location",),
+            coords={"location": self.bins.location},
         )
-        # deseasonalized = deseasonalized.chunk(
-        #    {"time": len(deseasonalized.time) // 10, "location": 100}
-        # )
-        return deseasonalized
+
+        # Group the deseasonalized data by region labels
+        grouped = deseasonalized.groupby(region_labels)
+
+        # Apply the quantile calculation to each group
+        result = grouped.map(self._assign_quantile_levels)
+
+        # Assign the results back to the quantile_array
+        quantile_array.values = result.values
+
+        # save the array
+        self.saver._save_extremes(quantile_array)
 
     def _assign_quantile_levels(self, deseasonalized):
         # Compute the quantiles for all levels across time and location
@@ -418,9 +383,6 @@ class RegionalExtremes:  # (InitializationConfig):
         upper_quantiles = deseasonalized.quantile(
             UPPER_QUANTILES_LEVEL, dim=["time", "location"]
         )
-        # deseasonalized = deseasonalized.chunk(
-        #     dict(location=20, time=len(deseasonalized.time) // 10)
-        # )
 
         # Create a mask for each quantile level, the one of the middle (between e.g 0.05 and 0.95) stay NaN.
         masks = (
@@ -444,38 +406,6 @@ class RegionalExtremes:  # (InitializationConfig):
         for i, mask in enumerate(masks):
             result = xr.where(mask, quantile_levels[i], result)
         return result
-
-
-def fake_xarray():
-    # Define time range
-    time = pd.date_range("2000-01-01T12:00:00", "2000-12-30T12:00:00", periods=365)
-
-    # Define the coordinates
-    longitude = -0.625
-    latitude = 46.63
-
-    # Create a MultiIndex for location (dummy index with one element)
-    location = pd.MultiIndex.from_tuples([("location_1",)], names=["loc_id"])
-
-    # Create the data using NumPy
-    days = np.arange(0, 365)
-    data = np.sin(2 * np.pi * days / 365).astype(np.float32)
-    dayofyear = time.dayofyear
-
-    # Create the xarray DataArray
-    fake_xarray = xr.DataArray(
-        data,
-        dims=["location", "time"],
-        coords={
-            "time": time,
-            "longitude": ("longitude", [longitude]),
-            "latitude": ("latitude", [latitude]),
-            "dayofyear": ("time", dayofyear),
-        },
-        name="EVIgapfilled_QCdyn",
-    )
-    fake_xarray = fake_xarray.stack(location=("longitude", "latitude"))
-    return fake_xarray
 
 
 if __name__ == "__main__":
@@ -530,4 +460,14 @@ if __name__ == "__main__":
         extremes_processor.find_bins()
 
     # Apply the regional threshold and compute the extremes
-    extremes_processor.apply_threshold()
+    # Load the data
+    dataset_processor = create_handler(config=config, n_samples=None)
+    msc, data = dataset_processor.preprocess_data(
+        scale=False,
+        return_time_serie=True,
+        reduce_temporal_resolution=False,
+        remove_nan=False,
+    )
+    # Deseasonalized data
+    deseasonalized = dataset_processor._deseasonalize(data, msc)
+    extremes_processor.apply_threshold(deseasonalized)

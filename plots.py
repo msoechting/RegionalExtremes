@@ -1,3 +1,17 @@
+import os
+import sys
+
+# Set LD_LIBRARY_PATH
+ld_library_path = os.environ.get("LD_LIBRARY_PATH", "")
+os.environ["LD_LIBRARY_PATH"] = (
+    f"{ld_library_path}:/Net/Groups/BGI/scratch/crobin/miniconda3/envs/ExtremesEnv2/lib"
+)
+
+# Restart the script with the updated environment
+if os.environ.get("LD_LIBRARY_PATH_SET") != "1":
+    os.environ["LD_LIBRARY_PATH_SET"] = "1"
+    os.execv(sys.executable, ["python"] + sys.argv)
+
 import xarray as xr
 import numpy as np
 import matplotlib
@@ -178,6 +192,11 @@ class PlotExtremes(InitializationConfig):
         )
 
         ax.set_extent(img_extent, crs=projection)
+        print(
+            bins.longitude.values.shape,
+            bins.latitude.values.shape,
+            rgb_normalized.shape,
+        )
 
         ax.pcolormesh(
             bins.longitude.values,
@@ -200,9 +219,7 @@ class PlotExtremes(InitializationConfig):
         "Map vegetation index per month of modis."
 
         dataset_processor = create_handler(config=self.config, n_samples=None)
-        data = dataset_processor.preprocess_data(
-            scale=False, remove_nan=False
-        ).EVIgapfilled_QCdyn
+        data = dataset_processor.preprocess_data(scale=False, remove_nan=False)
 
         data = data.sel(
             time=slice(datetime.date(2018, 1, 1), datetime.date(2018, 12, 31))
@@ -243,6 +260,12 @@ class PlotExtremes(InitializationConfig):
                 data_day.latitude.max(),
             )
             ax.set_extent(img_extent, crs=projection)
+
+            print(
+                data_day.longitude.values.shape,
+                data_day.latitude.values.shape,
+                data_day.values.shape,
+            )
 
             im = ax.pcolormesh(
                 data_day.longitude.values,
@@ -828,7 +851,6 @@ class PlotExtremes(InitializationConfig):
 
     def extremes_plots(self, date):
         extremes = self.loader._load_extremes()
-        print(extremes)
         # Set up the map projection
         projection = cartopy.crs.PlateCarree()
         data_day = extremes.sel(time=f"{date}T12:00:00.000000000")
@@ -842,6 +864,7 @@ class PlotExtremes(InitializationConfig):
         # Add coastlines and set global extent
         ax.coastlines()
         # ax.add_feature(cartopy.feature.OCEAN, zorder=100, edgecolor="k")
+
         # Plot the RGB data
         img_extent = (
             data_day.longitude.min(),
@@ -849,17 +872,18 @@ class PlotExtremes(InitializationConfig):
             data_day.latitude.min(),
             data_day.latitude.max(),
         )
+
         ax.set_extent(img_extent, crs=projection)
-        print(data_day)
         im = ax.pcolormesh(
-            data_day.longitude.values,
+            data_day.longitude.values,  # Test with a smaller subset
             data_day.latitude.values,
-            data_day.values,
+            data_day.EVIgapfilled_QCdyn.values.T,  # Ensure C is 1 smaller
+            shading="auto",
             transform=projection,
-            cmap="viridis",
-            vmin=-0.15,
-            vmax=0.15,
+            # cmap="viridis",
+            rasterized=True,
         )
+
         # Add a colorbar
         cbar = plt.colorbar(im, ax=ax, orientation="vertical", pad=0.08)
         cbar.set_label(f"{self.config.index} Extremes")
@@ -913,5 +937,6 @@ if __name__ == "__main__":
 
     # plot.region_distribution()
     # plot.map_modis()
-
+    # plot.map_bins()
     plot.extremes_plots("2003-08-15")
+#
