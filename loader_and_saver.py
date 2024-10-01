@@ -87,7 +87,7 @@ class Loader:
 
     def _load_extremes(self):
         """Saves the extremes quantile to a file."""
-        extremes_path = self.config.saving_path / "extremes.zarr"
+        extremes_path = self.config.saving_path / "extremes_1.zarr"
         if not os.path.exists(extremes_path):
             raise FileNotFoundError(f"The file {extremes_path} not found.")
         extremes = xr.open_zarr(extremes_path)

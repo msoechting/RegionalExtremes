@@ -18,6 +18,7 @@ import matplotlib
 import datetime
 
 import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap, BoundaryNorm
 from matplotlib.widgets import Slider
 import cartopy
 import random
@@ -853,7 +854,7 @@ class PlotExtremes(InitializationConfig):
         extremes = self.loader._load_extremes()
         # Set up the map projection
         projection = cartopy.crs.PlateCarree()
-        data_day = extremes.sel(time=f"{date}T12:00:00.000000000")
+        data_day = extremes.sel(time=f"{date}T12:00:00.000000000", method="nearest")
 
         fig, ax = plt.subplots(
             figsize=(12, 5),
@@ -863,7 +864,7 @@ class PlotExtremes(InitializationConfig):
         plt.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05)
         # Add coastlines and set global extent
         ax.coastlines()
-        # ax.add_feature(cartopy.feature.OCEAN, zorder=100, edgecolor="k")
+        ax.add_feature(cartopy.feature.OCEAN, zorder=100, edgecolor="k")
 
         # Plot the RGB data
         img_extent = (
@@ -873,20 +874,39 @@ class PlotExtremes(InitializationConfig):
             data_day.latitude.max(),
         )
 
+        # Define a colormap with distinct colors for each data value
+        colors = [
+            "#d73027",
+            "#fc8d59",
+            "#fee08b",
+            "#d9ef8b",
+            "#91cf60",
+            "#1a9850",
+        ]
+        cmap = ListedColormap(colors)
+
+        # Define boundaries based on your specific data values
+        boundaries = [0.01, 0.025, 0.05, 0.95, 0.975, 0.99, 1]
+        norm = BoundaryNorm(boundaries, cmap.N)
+
         ax.set_extent(img_extent, crs=projection)
         im = ax.pcolormesh(
             data_day.longitude.values,  # Test with a smaller subset
             data_day.latitude.values,
             data_day.EVIgapfilled_QCdyn.values.T,  # Ensure C is 1 smaller
-            shading="auto",
             transform=projection,
-            # cmap="viridis",
+            cmap=cmap,
+            norm=norm,
             rasterized=True,
         )
-
         # Add a colorbar
-        cbar = plt.colorbar(im, ax=ax, orientation="vertical", pad=0.08)
+        cbar = plt.colorbar(
+            im, ax=ax, orientation="vertical", pad=0.08, ticks=boundaries
+        )
         cbar.set_label(f"{self.config.index} Extremes")
+        cbar.set_ticks(boundaries[:-1])  # Use the first 6 boundaries (exclude 1.0)
+        cbar.set_ticklabels([f"{b:.3f}" for b in boundaries[:-1]])
+
         # Add a title
         title = ax.set_title(f"Regional extremes {date}")
         map_saving_path = self.saving_path / f"extremes_{date}.png"
@@ -938,5 +958,6 @@ if __name__ == "__main__":
     # plot.region_distribution()
     # plot.map_modis()
     # plot.map_bins()
-    plot.extremes_plots("2003-08-15")
+    # plot.threshold_time_serie()
+    plot.extremes_plots("2003-07-15")
 #

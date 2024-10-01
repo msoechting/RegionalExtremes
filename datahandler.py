@@ -291,7 +291,7 @@ class DatasetHandler(ABC):
         # Subtract the seasonal cycle
         deseasonalized = subset_data - aligned_msc
         deseasonalized = deseasonalized.isel(
-            time=slice(2, len(deseasonalized.time) - 1, 5)
+            time=slice(2, len(deseasonalized.time) - 1)
         )
         return deseasonalized
 
