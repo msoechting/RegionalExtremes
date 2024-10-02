@@ -380,14 +380,14 @@ class RegionalExtremes:  # (InitializationConfig):
         # save the array
         self.saver._save_extremes(quantile_array)
 
-    def apply_uniform_threshold(self, deseasonalized):
+    def apply_local_threshold(self, deseasonalized):
         """Compute and save a xarray (location, time) indicating the quantiles of extremes using a uniform threshold definition."""
         # Create a new DataArray to store the quantile values (0.025 or 0.975) for extreme values
         quantile_array = xr.full_like(deseasonalized.astype(float), np.nan)
 
         # Apply the quantile calculation to each location
         result = self._assign_quantile_levels(
-            deseasonalized=deseasonalized, per_location=True
+            deseasonalized=deseasonalized, method="local"
         )
 
         # Assign the results back to the quantile_array
@@ -396,48 +396,66 @@ class RegionalExtremes:  # (InitializationConfig):
         # save the array
         self.saver._save_extremes(quantile_array)
 
-    def _assign_quantile_levels(self, deseasonalized, per_location=False):
-        # Compute the quantiles for all levels across time and location
-        deseasonalized = deseasonalized.chunk("auto")  # dict(location=20, time=-1))
-        # deseasonalized = deseasonalized.chunk(dict(location=-1))
-        if per_location:
-            lower_quantiles = deseasonalized.quantile(
-                LOWER_QUANTILES_LEVEL,
-                dim=["time"],
-            )
-            upper_quantiles = deseasonalized.quantile(
-                UPPER_QUANTILES_LEVEL,
-                dim=["time"],
-            )
+    def assign_quantile_levels(self, deseasonalized, method="regional"):
+        """
+        Assign quantile levels to deseasonalized data.
+
+        Args:
+            deseasonalized (xarray.DataArray): Deseasonalized data.
+            method (str): Method for computing quantiles. Either "regional" or "local".
+
+        Returns:
+            xarray.DataArray: Data with assigned quantile levels.
+        """
+        deseasonalized = deseasonalized.chunk("auto")
+
+        if method == "regional":
+            dim = ["time", "location"]
+        elif method == "local":
+            dim = ["time"]
         else:
-            lower_quantiles = deseasonalized.quantile(
-                LOWER_QUANTILES_LEVEL, dim=["time", "location"]
-            )
-            upper_quantiles = deseasonalized.quantile(
-                UPPER_QUANTILES_LEVEL, dim=["time", "location"]
-            )
-        # Create a mask for each quantile level, the one of the middle (between e.g 0.05 and 0.95) stay NaN.
-        masks = (
-            [deseasonalized < lower_quantiles[0]]
-            + [
-                (deseasonalized >= lower_quantiles[level_i - 1])
-                & (deseasonalized < lower_quantiles[level_i])
-                for level_i in range(1, len(LOWER_QUANTILES_LEVEL))
-            ]
-            + [
-                (deseasonalized > upper_quantiles[level_i - 1])
-                & (deseasonalized <= upper_quantiles[level_i])
-                for level_i in range(1, len(UPPER_QUANTILES_LEVEL))
-            ]
-            + [deseasonalized > upper_quantiles[-1]]
-        )
+            raise NotImplementedError("Global threshold method is not yet implemented.")
+
+        lower_quantiles = deseasonalized.quantile(LOWER_QUANTILES_LEVEL, dim=dim)
+        upper_quantiles = deseasonalized.quantile(UPPER_QUANTILES_LEVEL, dim=dim)
+
         quantile_levels = np.concatenate((LOWER_QUANTILES_LEVEL, UPPER_QUANTILES_LEVEL))
 
-        # Compute xarray mask with the quantiles
+        masks = self._create_quantile_masks(
+            deseasonalized, lower_quantiles, upper_quantiles
+        )
+
         result = xr.full_like(deseasonalized.astype(float), np.nan)
         for i, mask in enumerate(masks):
             result = xr.where(mask, quantile_levels[i], result)
+
         return result
+
+    def _create_quantile_masks(self, data, lower_quantiles, upper_quantiles):
+        """
+        Create masks for each quantile level.
+
+        Args:
+            data (xarray.DataArray): Input data.
+            lower_quantiles (xarray.DataArray): Lower quantiles.
+            upper_quantiles (xarray.DataArray): Upper quantiles.
+
+        Returns:
+            list: List of boolean masks for each quantile level.
+        """
+        masks = [
+            data < lower_quantiles[0],
+            *[
+                (data >= lower_quantiles[i - 1]) & (data < lower_quantiles[i])
+                for i in range(1, len(LOWER_QUANTILES_LEVEL))
+            ],
+            *[
+                (data > upper_quantiles[i - 1]) & (data <= upper_quantiles[i])
+                for i in range(1, len(UPPER_QUANTILES_LEVEL))
+            ],
+            data > upper_quantiles[-1],
+        ]
+        return masks
 
 
 def regional_extremes_method(args):
@@ -494,7 +512,7 @@ def regional_extremes_method(args):
     extremes_processor.apply_regional_threshold(deseasonalized)
 
 
-def uniform_extremes_method(args):
+def local_extremes_method(args):
     # Initialization of the configs, load and save paths, log.txt.
     config = InitializationConfig(args)
 
@@ -515,7 +533,7 @@ def uniform_extremes_method(args):
     )
     # Deseasonalized data
     deseasonalized = dataset_processor._deseasonalize(data, msc)
-    extremes_processor.apply_uniform_threshold(deseasonalized)
+    extremes_processor.apply_local_threshold(deseasonalized)
 
 
 if __name__ == "__main__":
@@ -530,9 +548,11 @@ if __name__ == "__main__":
     args.method = "uniform"
 
     # args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-10-01_14:53:47_eco_threshold_2016"
-
-    # Apply the regional extremes method
-    # regional_extremes_method(args)
-
-    # Apply the uniform threshold method
-    uniform_extremes_method(args)
+    if args.method == "regional":
+        # Apply the regional extremes method
+        regional_extremes_method(args)
+    elif args.method == "local":
+        # Apply the uniform threshold method
+        uniform_extremes_method(args)
+    elif args.method == "global":
+        raise NotImplementedError("the global method is not yet implemented.")
