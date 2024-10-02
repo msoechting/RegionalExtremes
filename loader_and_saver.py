@@ -104,6 +104,13 @@ class Saver:
     ):
         self.config = config
 
+    def _save_pca_model(self, pca):
+        # Save the PCA model
+        pca_path = self.config.saving_path / "pca_matrix.pkl"
+        with open(pca_path, "wb") as f:
+            pk.dump(pca, f)
+        printt(f"PCA saved: {pca_path}")
+
     def _save_pca_projection(self, pca_projection, explained_variance_ratio_) -> None:
         """Saves the limits bins to a file."""
         # Split the components into separate DataArrays

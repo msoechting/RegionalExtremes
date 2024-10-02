@@ -36,7 +36,7 @@ To execute the main script, use the following command:
    - You can pass the script arguments in two ways:
      - Directly within the `__main__` function of the script.
      - Via the command line when executing the script.
-   - It's generally recommended to define the arguments within the `__main__` function to avoid potential conflicts. If using command-line arguments, ensure no legacy code is overwriting them.
+   - I often do it within the `__main__` function. If using command-line arguments, ensure no legacy code is overwriting them.
 
 2. **Environment Variables**:
    - If you encounter issues with libraries not being found, you might need to set the `LD_LIBRARY_PATH`. You can do this by running:

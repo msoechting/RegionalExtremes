@@ -1,24 +1,12 @@
 import xarray as xr
-import dask.array as da
-from argparse import Namespace
+
 import numpy as np
-import json
-import random
-import datetime
 from sklearn.decomposition import PCA, KernelPCA
-import pandas as pd
 import pickle as pk
-from pathlib import Path
-from typing import Union
-import time
+
 import sys
-import os
-from sklearn.neighbors import NearestNeighbors
 
-import matplotlib.pyplot as plt
-
-
-from utils import initialize_logger, printt, raiset, int_or_none
+from utils import initialize_logger, printt, int_or_none
 from loader_and_saver import Loader, Saver
 from datahandler import create_handler
 from config import InitializationConfig, CLIMATIC_INDICES, ECOLOGICAL_INDICES
@@ -27,7 +15,7 @@ np.set_printoptions(threshold=sys.maxsize)
 
 from global_land_mask import globe
 
-import argparse  # import ArgumentParser
+import argparse
 
 LOWER_QUANTILES_LEVEL = np.array([0.01, 0.025, 0.05])
 UPPER_QUANTILES_LEVEL = np.array([0.95, 0.975, 0.99])
@@ -130,7 +118,7 @@ def parser_arguments():
     return parser
 
 
-class RegionalExtremes:  # (InitializationConfig):
+class RegionalExtremes:
     def __init__(
         self,
         config: InitializationConfig,
@@ -173,20 +161,14 @@ class RegionalExtremes:  # (InitializationConfig):
         self,
         scaled_data,
     ):
-        """compute the principal component analysis (PCA) on the mean seasonal cycle (MSC) of n samples and scale it between 0 and 1.
-        Each time step of the msc is considered as an independent component. nb of time_step used for the PCA computation = 366 / time_resolution.
-
-        Args:
-            n_components (int, optional): number of components to compute the PCA. Defaults to 3.
-            time_resolution (int, optional): temporal resolution of the msc, to reduce computationnal workload. Defaults to 5.
+        """compute the principal component analysis (PCA) on the mean seasonal cycle (MSC) of n samples scaled between 0 and 1.
+        Each time step of the msc is considered as an independent component. nb of time_step used for the PCA computation = 366 / time_resolution (defined in the dataloader).
         """
         assert not hasattr(
             self.pca, "explained_variance_"
         ), "A pca already have been fit."
         assert self.config.path_load_experiment is None, "A model is already loaded."
-        # sassert scaled_data.dayofyear.shape[0] == round(
-        # s    366 / self.config.time_resolution
-        # s)
+
         assert (self.n_components > 0) & (
             self.n_components <= 366
         ), "n_components have to be in the range of days of a years"
@@ -206,10 +188,7 @@ class RegionalExtremes:  # (InitializationConfig):
             printt("Unknown PCA type.")
 
         # Save the PCA model
-        pca_path = self.config.saving_path / "pca_matrix.pkl"
-        with open(pca_path, "wb") as f:
-            pk.dump(self.pca, f)
-        printt(f"PCA saved: {pca_path}")
+        self.saver._save_pca_model(self.pca)
 
         return pca_components
 
@@ -227,11 +206,10 @@ class RegionalExtremes:  # (InitializationConfig):
             np.ndarray: Transformed data after applying PCA.
         """
         if self.projected_data is not None:
-            raiset(
-                ValueError(
-                    "self.projected_data is not None, projected_data already have been computed.",
-                )
+            raise ValueError(
+                "self.projected_data is not None, projected_data already have been computed.",
             )
+
         self._validate_scaled_data(scaled_data)
 
         transformed_data = xr.apply_ufunc(
@@ -257,10 +235,8 @@ class RegionalExtremes:  # (InitializationConfig):
         else:
             expected_shape = round(366 / self.config.time_resolution)
         if scaled_data.shape[1] != expected_shape:
-            raiset(
-                ValueError(
-                    f"scaled_data should have {expected_shape} columns, but has {scaled_data.shape[1]} columns."
-                )
+            raise ValueError(
+                f"scaled_data should have {expected_shape} columns, but has {scaled_data.shape[1]} columns."
             )
 
     def define_limits_bins(self) -> list[np.ndarray]:
@@ -268,12 +244,6 @@ class RegionalExtremes:  # (InitializationConfig):
         Define the bounds of each bin on the projected data for each component.
         Ideally applied on the largest possible amount of data to capture
         the distribution in the projected space (especially minimum and maximum).
-        Fit the PCA with a subset of the data, then project the full dataset,
-        then define the bins on the full dataset projected.
-        n_bins is per component, so number of boxes = n_bins**n_components
-
-        Args:
-            projected_data (np.ndarray): Data projected after PCA.
 
         Returns:
             list of np.ndarray: List where each array contains the bin limits for each component.
@@ -297,7 +267,7 @@ class RegionalExtremes:  # (InitializationConfig):
             )
 
         if self.n_bins <= 0:
-            raiset(ValueError("n_bins should be greater than 0"))
+            raise ValueError("n_bins should be greater than 0")
 
     def _calculate_limits_bins(self, projected_data: np.ndarray) -> list[np.ndarray]:
         """Calculates the limits bins for each component."""
@@ -311,6 +281,7 @@ class RegionalExtremes:  # (InitializationConfig):
                 )
                 for component in range(self.n_components)
             ]
+        # KPCA. Legacy, to remove?
         else:
             return [
                 np.linspace(
@@ -321,8 +292,8 @@ class RegionalExtremes:  # (InitializationConfig):
                 for component in range(self.n_components)
             ]
 
-    # Function to find the box for multiple points
     def find_bins(self):
+        """Function to attribute at every location the bin it belong to."""
         assert self.projected_data.shape[1] == len(self.limits_bins)
         assert (
             len(self.limits_bins) == self.n_components
@@ -338,11 +309,6 @@ class RegionalExtremes:  # (InitializationConfig):
         self.saver._save_bins(box_indices, self.projected_data)
         self.bins = box_indices
         return box_indices
-
-    def nearestneighbors(self):
-        distances, indices = NearestNeighbors(n_neighbors=20, algorithm="kd_tree").fit(
-            X
-        )
 
     def apply_regional_threshold(self, deseasonalized):
         """Compute and save a xarray (location, time) indicating the quantiles of extremes using the regional threshold definition."""
@@ -459,6 +425,8 @@ class RegionalExtremes:  # (InitializationConfig):
 
 
 def regional_extremes_method(args):
+    """Fit the PCA with a subset of the data, then project the full dataset,
+    then define the bins on the full dataset projected."""
     # Initialization of the configs, load and save paths, log.txt.
     config = InitializationConfig(args)
 
@@ -507,8 +475,9 @@ def regional_extremes_method(args):
         reduce_temporal_resolution=False,
         remove_nan=False,
     )
-    # Deseasonalized data
+    # Deseasonalize the data
     deseasonalized = dataset_processor._deseasonalize(data, msc)
+    # Compute the quantiles per regions/biome (=bins)
     extremes_processor.apply_regional_threshold(deseasonalized)
 
 
@@ -533,6 +502,7 @@ def local_extremes_method(args):
     )
     # Deseasonalized data
     deseasonalized = dataset_processor._deseasonalize(data, msc)
+    # Apply the local threshold
     extremes_processor.apply_local_threshold(deseasonalized)
 
 
@@ -545,7 +515,7 @@ if __name__ == "__main__":
     args.n_components = 2
     args.n_bins = 50
     args.compute_variance = False
-    args.method = "uniform"
+    args.method = "regional"
 
     # args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-10-01_14:53:47_eco_threshold_2016"
     if args.method == "regional":
