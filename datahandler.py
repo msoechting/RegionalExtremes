@@ -88,7 +88,7 @@ class DatasetHandler(ABC):
         if reduce_temporal_resolution:
             self._reduce_temporal_resolution()
 
-        if remove_nan and ~self.n_samples:
+        if remove_nan and not self.n_samples:
             self._remove_nans()
 
         if scale:
@@ -167,9 +167,10 @@ class DatasetHandler(ABC):
                 replace=False,
             )
         )
+
         if self.data.sizes["location"] != self.n_samples:
-            raise (
-                "Number of samples != n_samples. The number of samples without NaNs is likely too low, increase the factor of n_candidates."
+            raise ValueError(
+                f"Number of samples ({self.data.sizes['location']}) != n_samples ({self.n_samples}). The number of samples without NaNs is likely too low, increase the factor of n_candidates."
             )
         printt(f"Randomly selected {self.data.sizes['location']} samples for training.")
 

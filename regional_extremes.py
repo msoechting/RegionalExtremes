@@ -120,6 +120,13 @@ def parser_arguments():
         default=None,
         help="Path of the trained model folder.",
     )
+
+    parser.add_argument(
+        "--method",
+        type=str,
+        default="regional",
+        help="Type of method to compute extremes. Either 'regional' or 'uniform'.",
+    )
     return parser
 
 
@@ -274,6 +281,7 @@ class RegionalExtremes:  # (InitializationConfig):
         self._validate_inputs(self.projected_data)
 
         self.limits_bins = self._calculate_limits_bins(self.projected_data)
+
         self.saver._save_limits_bins(self.limits_bins)
         printt("Limits are computed and saved.")
         return self.limits_bins
@@ -281,13 +289,11 @@ class RegionalExtremes:  # (InitializationConfig):
     def _validate_inputs(self, projected_data: np.ndarray) -> None:
         """Validates the inputs for define_limits_bins."""
         if isinstance(self.pca, PCA) and not hasattr(self.pca, "explained_variance_"):
-            raiset(ValueError("PCA model has not been trained yet."))
+            raise ValueError("PCA model has not been trained yet.")
 
         if projected_data.shape[1] != self.n_components:
-            raiset(
-                ValueError(
-                    "projected_data should have the same number of columns as n_components"
-                )
+            raise ValueError(
+                "projected_data should have the same number of columns as n_components"
             )
 
         if self.n_bins <= 0:
@@ -338,8 +344,8 @@ class RegionalExtremes:  # (InitializationConfig):
             X
         )
 
-    def apply_threshold(self, deseasonalized):
-        """Compute and save a xarray (location, time) indicating the quantiles of extremes."""
+    def apply_regional_threshold(self, deseasonalized):
+        """Compute and save a xarray (location, time) indicating the quantiles of extremes using the regional threshold definition."""
 
         # self.bins = self.bins.sel(location=deseasonalized.location)
         deseasonalized = deseasonalized.sel(location=self.bins.location)
@@ -374,16 +380,42 @@ class RegionalExtremes:  # (InitializationConfig):
         # save the array
         self.saver._save_extremes(quantile_array)
 
-    def _assign_quantile_levels(self, deseasonalized):
-        # Compute the quantiles for all levels across time and location
-        deseasonalized = deseasonalized.chunk("auto")  # dict(location=20, time=-1))
-        lower_quantiles = deseasonalized.quantile(
-            LOWER_QUANTILES_LEVEL, dim=["time", "location"]
-        )
-        upper_quantiles = deseasonalized.quantile(
-            UPPER_QUANTILES_LEVEL, dim=["time", "location"]
+    def apply_uniform_threshold(self, deseasonalized):
+        """Compute and save a xarray (location, time) indicating the quantiles of extremes using a uniform threshold definition."""
+        # Create a new DataArray to store the quantile values (0.025 or 0.975) for extreme values
+        quantile_array = xr.full_like(deseasonalized.astype(float), np.nan)
+
+        # Apply the quantile calculation to each location
+        result = self._assign_quantile_levels(
+            deseasonalized=deseasonalized, per_location=True
         )
 
+        # Assign the results back to the quantile_array
+        quantile_array.values = result.values
+
+        # save the array
+        self.saver._save_extremes(quantile_array)
+
+    def _assign_quantile_levels(self, deseasonalized, per_location=False):
+        # Compute the quantiles for all levels across time and location
+        deseasonalized = deseasonalized.chunk("auto")  # dict(location=20, time=-1))
+        # deseasonalized = deseasonalized.chunk(dict(location=-1))
+        if per_location:
+            lower_quantiles = deseasonalized.quantile(
+                LOWER_QUANTILES_LEVEL,
+                dim=["time"],
+            )
+            upper_quantiles = deseasonalized.quantile(
+                UPPER_QUANTILES_LEVEL,
+                dim=["time"],
+            )
+        else:
+            lower_quantiles = deseasonalized.quantile(
+                LOWER_QUANTILES_LEVEL, dim=["time", "location"]
+            )
+            upper_quantiles = deseasonalized.quantile(
+                UPPER_QUANTILES_LEVEL, dim=["time", "location"]
+            )
         # Create a mask for each quantile level, the one of the middle (between e.g 0.05 and 0.95) stay NaN.
         masks = (
             [deseasonalized < lower_quantiles[0]]
@@ -408,18 +440,7 @@ class RegionalExtremes:  # (InitializationConfig):
         return result
 
 
-if __name__ == "__main__":
-    args = parser_arguments().parse_args()
-    # args.name = "eco_threshold"
-    # args.index = "EVI"
-    # args.k_pca = False
-    # args.n_samples = 1000
-    # args.n_components = 2
-    # args.n_bins = 50
-    # args.compute_variance = False
-
-    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-09-04_15:18:47_eco_50bins"
-
+def regional_extremes_method(args):
     # Initialization of the configs, load and save paths, log.txt.
     config = InitializationConfig(args)
 
@@ -470,4 +491,48 @@ if __name__ == "__main__":
     )
     # Deseasonalized data
     deseasonalized = dataset_processor._deseasonalize(data, msc)
-    extremes_processor.apply_threshold(deseasonalized)
+    extremes_processor.apply_regional_threshold(deseasonalized)
+
+
+def uniform_extremes_method(args):
+    # Initialization of the configs, load and save paths, log.txt.
+    config = InitializationConfig(args)
+
+    # Initialization of RegionalExtremes, load data if already computed.
+    extremes_processor = RegionalExtremes(
+        config=config,
+        n_components=args.n_components,
+        n_bins=args.n_bins,
+    )
+
+    dataset_processor = create_handler(config=config, n_samples=None)  # all the dataset
+
+    msc, data = dataset_processor.preprocess_data(
+        scale=False,
+        return_time_serie=True,
+        reduce_temporal_resolution=False,
+        remove_nan=False,
+    )
+    # Deseasonalized data
+    deseasonalized = dataset_processor._deseasonalize(data, msc)
+    extremes_processor.apply_uniform_threshold(deseasonalized)
+
+
+if __name__ == "__main__":
+    args = parser_arguments().parse_args()
+    args.name = "eco_threshold_uniform_2000"
+    args.index = "EVI"
+    args.k_pca = False
+    args.n_samples = 1000
+    args.n_components = 2
+    args.n_bins = 50
+    args.compute_variance = False
+    args.method = "uniform"
+
+    # args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-10-01_14:53:47_eco_threshold_2016"
+
+    # Apply the regional extremes method
+    # regional_extremes_method(args)
+
+    # Apply the uniform threshold method
+    uniform_extremes_method(args)

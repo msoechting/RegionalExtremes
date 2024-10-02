@@ -674,8 +674,8 @@ class PlotExtremes(InitializationConfig):
 
         # Scatter plot
         sc = ax.scatter(
+            pca_projection.isel(component=0).values.T,
             pca_projection.isel(component=1).values.T,
-            pca_projection.isel(component=2).values.T,
             # pca_projection.isel(component=2).values.T,
             c=colors.values,
             s=75,
@@ -689,7 +689,7 @@ class PlotExtremes(InitializationConfig):
         ax.set_title("2D PCA Projection with RGB Colors")
         ax.legend()
 
-        saving_path = self.saving_path / "2D_pca_12.png"
+        saving_path = self.saving_path / "2D_pca.png"
         plt.savefig(saving_path)
 
     def distribution_per_region(self):
@@ -919,7 +919,7 @@ class PlotExtremes(InitializationConfig):
 if __name__ == "__main__":
     args = parser_arguments().parse_args()
 
-    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-09-04_15:18:47_eco_50bins"
+    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-10-02_14:53:56_eco_threshold_uniform"
     config = InitializationConfig(args)
     # loader = Loader(config)
     # print(loader._load_pca_matrix().explained_variance_ratio_)
@@ -927,7 +927,6 @@ if __name__ == "__main__":
     # print(limits_bins)
     plot = PlotExtremes(config=config)
     # plot.map_component()
-    # plot.plot_3D_pca()
     # plot.map_bins()
 
     # plot.plot_2D_component()
@@ -959,5 +958,11 @@ if __name__ == "__main__":
     # plot.map_modis()
     # plot.map_bins()
     # plot.threshold_time_serie()
-    plot.extremes_plots("2003-07-15")
+    plot.extremes_plots("2022-08-15")
+    plot.extremes_plots("2021-08-15")
+    plot.extremes_plots("2020-08-15")
+    plot.extremes_plots("2019-08-15")
+    plot.extremes_plots("2018-08-15")
+    plot.extremes_plots("2017-08-15")
+    plot.extremes_plots("2016-08-15")
 #

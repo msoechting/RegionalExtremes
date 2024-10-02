@@ -58,11 +58,11 @@ class Loader:
         """Loads the limits bins from a file."""
         limits_bins_path = self.config.saving_path / "limits_bins.npz"
         if not os.path.exists(limits_bins_path):
-            print(f"Limits bins not found at {limits_bins_path}")
+            printt(f"Limits bins not found at {limits_bins_path}")
             return None
         data = np.load(limits_bins_path)
         limits_bins = [data[f"arr_{i}"] for i in range(len(data.files))]
-        print("Limits bins loaded.")
+        printt("Limits bins loaded.")
         return limits_bins
 
     def _load_bins(self):
@@ -87,7 +87,7 @@ class Loader:
 
     def _load_extremes(self):
         """Saves the extremes quantile to a file."""
-        extremes_path = self.config.saving_path / "extremes_1.zarr"
+        extremes_path = self.config.saving_path / "extremes.zarr"
         if not os.path.exists(extremes_path):
             raise FileNotFoundError(f"The file {extremes_path} not found.")
         extremes = xr.open_zarr(extremes_path)
@@ -153,7 +153,7 @@ class Saver:
                 f"The file {limits_bins_path} already exists. Rewriting is not allowed."
             )
         np.savez(limits_bins_path, *limits_bins)
-        print(f"Limits bins saved to {limits_bins_path}")
+        printt(f"Limits bins saved to {limits_bins_path}")
 
     def _save_bins(self, boxes_indices, projected_data):
         """Saves the bins to a file."""
@@ -176,7 +176,7 @@ class Saver:
             location=["longitude", "latitude"]
         ).unstack("location")
 
-        bins_path = self.config.saving_path / "boxes.zarr"
+        bins_path = self.config.saving_path / "bins.zarr"
         if os.path.exists(bins_path):
             raise FileExistsError(
                 f"The file {bins_path} already exists. Rewriting is not allowed."
