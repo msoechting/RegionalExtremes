@@ -16,7 +16,7 @@
    After the environment is created, ensure that it's active:
 
    ```bash
-   conda activate ExtremesEnv2
+   conda activate ExtremesEnv
    ```
 
 ## Running the Script
