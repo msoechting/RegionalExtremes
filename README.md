@@ -1,8 +1,6 @@
 
 # RegionalExtremes
-
 ---
-
 ## Installation
 
 1. **Set up the Conda environment**:
