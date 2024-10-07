@@ -70,7 +70,7 @@ class Loader:
         if not os.path.exists(bins_path):
             bins_path = self.config.saving_path / "boxes.zarr"
             if not os.path.exists(bins_path):
-                printt(f"Bins not found.")
+                printt(f"The file {bins_path} not found.")
                 return None
             Warning(
                 'boxes.zarr is an inconsistent legacy name, change it for "bins.zarr"'
@@ -85,11 +85,24 @@ class Loader:
         printt("Bins loaded.")
         return data
 
+    def _load_thresholds(self):
+        """Saves the threshold quantiles to a file."""
+        thresholds_path = self.config.saving_path / "thresholds.zarr"
+        if not os.path.exists(thresholds_path):
+            printt(f"The file {thresholds_path} not found.")
+            return None
+        thresholds = xr.open_zarr(thresholds_path)
+        # Unstack location for longitude and latitude as dimensions
+        # extremes = extremes.stack(location=["longitude", "latitude"])
+        printt("Thresholds loaded.")
+        return thresholds
+
     def _load_extremes(self):
         """Saves the extremes quantile to a file."""
         extremes_path = self.config.saving_path / "extremes.zarr"
         if not os.path.exists(extremes_path):
-            raise FileNotFoundError(f"The file {extremes_path} not found.")
+            printt(f"The file {extremes_path} not found.")
+            return None
         extremes = xr.open_zarr(extremes_path)
         # Unstack location for longitude and latitude as dimensions
         # extremes = extremes.stack(location=["longitude", "latitude"])
@@ -191,9 +204,24 @@ class Saver:
         boxes_indices.to_zarr(bins_path)
         printt("Boxes computed and saved.")
 
-    def _save_extremes(self, extremes):
+    def _save_thresholds(self, thresholds):
         """Saves the extremes quantile to a file."""
 
+        # Unstack location for longitude and latitude as dimensions
+        thresholds = thresholds.set_index(location=["longitude", "latitude"]).unstack(
+            "location"
+        )
+
+        thresholds_path = self.config.saving_path / "thresholds.zarr"
+        if os.path.exists(thresholds_path):
+            raise FileExistsError(
+                f"The file {thresholds_path} already exists. Rewriting is not allowed."
+            )
+        thresholds.to_zarr(thresholds_path)
+        printt("Thresholds computed and saved.")
+
+    def _save_extremes(self, extremes):
+        """Saves the extremes quantile to a file."""
         # Unstack location for longitude and latitude as dimensions
         extremes = extremes.set_index(location=["longitude", "latitude"]).unstack(
             "location"
