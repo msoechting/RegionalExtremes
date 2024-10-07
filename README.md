@@ -1,9 +1,6 @@
-Here's an improved version of your `README` file:
-
----
 
 # RegionalExtremes
-
+---
 ## Installation
 
 1. **Set up the Conda environment**:
@@ -19,7 +16,7 @@ Here's an improved version of your `README` file:
    After the environment is created, ensure that it's active:
 
    ```bash
-   conda activate ExtremesEnv2
+   conda activate ExtremesEnv
    ```
 
 ## Running the Script
