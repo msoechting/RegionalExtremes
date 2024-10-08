@@ -104,12 +104,8 @@ class DatasetHandler(ABC):
 
     def _spatial_filtering(self, data):
         # Filter data from the polar regions
-        data = self.data.where(
-            np.abs(self.data.latitude) <= NORTH_POLE_THRESHOLD, drop=True
-        )
-        data = self.data.where(
-            np.abs(self.data.latitude) >= SOUTH_POLE_THRESHOLD, drop=True
-        )
+        data = data.where(np.abs(data.latitude) <= NORTH_POLE_THRESHOLD, drop=True)
+        data = data.where(np.abs(data.latitude) >= SOUTH_POLE_THRESHOLD, drop=True)
 
         # Filter dataset to select Europe
         # Select European data
@@ -148,7 +144,7 @@ class DatasetHandler(ABC):
         # Select the values at the specified coordinates
         selected_data = self.data[self.variable_name].sel(location=selected_locations)
         # Remove NaNs
-        condition = ~selected_data.isnull().any(dim="time").compute()  #
+        condition = ~selected_data.isnull().all(dim="time").compute()  #
         selected_data = selected_data.where(condition, drop=True)
 
         # Select randomly n_samples samples in selected_data

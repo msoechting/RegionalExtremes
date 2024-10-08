@@ -778,6 +778,7 @@ class PlotExtremes(InitializationConfig):
         pass
 
     def threshold_time_serie(self):
+
         # quantile_array = quantile_array.where(mask, subset_quantiles_array)
         # quantile_array.isel(location=mask) = subset_quantiles_array
         # Define the colormap for different quantile levels
@@ -915,11 +916,25 @@ class PlotExtremes(InitializationConfig):
         # Show the plot
         plt.show()
 
+    def check_number(self, config):
+        extremes = self.loader._load_extremes().EVIgapfilled_QCdyn
+        dataset_processor = create_handler(
+            config=config, n_samples=None
+        )  # all the dataset
+        extremes = dataset_processor._spatial_filtering(extremes)
+        condition = ~extremes.isnull().all(dim="time").compute()
+        extremes = extremes.where(condition, drop=True)
+        # extremes = extremes.isel(latitude=70, longitude=50)
+        # todo remove ocean and non vegetated area!!
+        unique, counts = np.unique(extremes.values, return_counts=True)
+        print(unique)
+        print((counts / sum(counts)) * 100)
+
 
 if __name__ == "__main__":
     args = parser_arguments().parse_args()
 
-    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-10-02_14:53:56_eco_threshold_uniform"
+    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-10-02_15:04:53_eco_threshold_uniform_2000"
     config = InitializationConfig(args)
     # loader = Loader(config)
     # print(loader._load_pca_matrix().explained_variance_ratio_)
@@ -958,11 +973,13 @@ if __name__ == "__main__":
     # plot.map_modis()
     # plot.map_bins()
     # plot.threshold_time_serie()
-    plot.extremes_plots("2022-08-15")
-    plot.extremes_plots("2021-08-15")
-    plot.extremes_plots("2020-08-15")
-    plot.extremes_plots("2019-08-15")
-    plot.extremes_plots("2018-08-15")
-    plot.extremes_plots("2017-08-15")
-    plot.extremes_plots("2016-08-15")
-#
+    plot.check_number(config)
+    # plot.extremes_plots("2022-08-15")
+    # plot.extremes_plots("2021-08-15")
+    # plot.extremes_plots("2020-08-15")
+    # plot.extremes_plots("2019-08-15")
+    # plot.extremes_plots("2018-08-15")
+    # plot.extremes_plots("2017-08-15")
+    # plot.extremes_plots("2016-08-15")
+    # plot.extremes_plots("2003-08-15")
+    # plot.extremes_plots("2004-08-15")

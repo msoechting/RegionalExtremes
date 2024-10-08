@@ -366,7 +366,7 @@ class RegionalExtremes:
         """Compute and save a xarray (location, time) indicating the quantiles of extremes using a uniform threshold definition."""
         LOWER_QUANTILES_LEVEL, UPPER_QUANTILES_LEVEL = quantile_levels
         # Create a new DataArray to store the quantile values (0.025 or 0.975) for extreme values
-        quantile_array = xr.full_like(deseasonalized.astype(float), np.nan)
+        extremes_array = xr.full_like(deseasonalized.astype(float), np.nan)
 
         # Create a new DataArray to store the threshold related to each quantiles.
         quantile_levels = np.concatenate((LOWER_QUANTILES_LEVEL, UPPER_QUANTILES_LEVEL))
@@ -388,10 +388,10 @@ class RegionalExtremes:
 
         # Assign the results back to the quantile_array
         extremes_array.values = results["extremes"].values
-        thresholds_array.values = results["thresholds"].values
+        thresholds_array.values = results["thresholds"].values.T
 
         # save the array
-        self.saver._save_extremes(quantile_array)
+        self.saver._save_extremes(extremes_array)
         self.saver._save_thresholds(thresholds_array)
 
     def _compute_thresholds(self, deseasonalized, quantile_levels, method="regional"):
@@ -544,16 +544,16 @@ def local_extremes_method(args, quantile_levels):
 
 if __name__ == "__main__":
     args = parser_arguments().parse_args()
-    args.name = "eco_threshold_uniform_2000"
+    args.name = "eco_threshold_local_2000_test"
     args.index = "EVI"
     args.k_pca = False
     args.n_samples = 1000
     args.n_components = 2
     args.n_bins = 50
     args.compute_variance = False
-    args.method = "local"
+    args.method = "regional"
 
-    # args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-10-01_14:52:57_eco_threshold_2000"
+    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-10-01_14:52:57_eco_threshold_2000"
 
     LOWER_QUANTILES_LEVEL = np.array([0.01, 0.025, 0.05])
     UPPER_QUANTILES_LEVEL = np.array([0.95, 0.975, 0.99])
