@@ -1,3 +1,7 @@
+###
+# plot file to plot data, experiments etc.
+# Draft, the code is not made to be shared and reused!
+###
 import os
 import sys
 
@@ -916,25 +920,122 @@ class PlotExtremes(InitializationConfig):
         # Show the plot
         plt.show()
 
-    def check_number(self, config):
+    def check_number(self, config, date):
         extremes = self.loader._load_extremes().EVIgapfilled_QCdyn
         dataset_processor = create_handler(
             config=config, n_samples=None
         )  # all the dataset
-        extremes = dataset_processor._spatial_filtering(extremes)
         condition = ~extremes.isnull().all(dim="time").compute()
         extremes = extremes.where(condition, drop=True)
-        # extremes = extremes.isel(latitude=70, longitude=50)
-        # todo remove ocean and non vegetated area!!
+        extremes = dataset_processor._spatial_filtering(extremes)
+
+        extremes = extremes.sel(time=f"{date}T12:00:00.000000000", method="nearest")
+        print(extremes.values.shape)
         unique, counts = np.unique(extremes.values, return_counts=True)
         print(unique)
         print((counts / sum(counts)) * 100)
+
+    def threshold(self):
+        threshold = self.loader._load_thresholds().__xarray_dataarray_variable__
+
+        projection = cartopy.crs.PlateCarree()
+
+        # Create the figure and axes
+        fig, ax = plt.subplots(
+            figsize=(12, 5),
+            subplot_kw={"projection": projection},
+        )
+        # adjust the plot
+        plt.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05)
+        # Add coastlines and set global extent
+        ax.coastlines()
+        # ax.add_feature(cartopy.feature.OCEAN, zorder=100, edgecolor="k")
+        # Plot the RGB data
+        img_extent = (
+            threshold.longitude.min(),
+            threshold.longitude.max(),
+            threshold.latitude.min(),
+            threshold.latitude.max(),
+        )
+        ax.set_extent(img_extent, crs=projection)
+
+        im = ax.pcolormesh(
+            threshold.longitude.values,
+            threshold.latitude.values,
+            threshold.sel(quantile=0.975).values.T,
+            transform=projection,
+            cmap="viridis",
+            # vmin=-0.15,
+            # vmax=0.15,
+        )
+        # Add a colorbar
+        cbar = plt.colorbar(im, ax=ax, orientation="vertical", pad=0.08)
+        cbar.set_label(f"Threshold")
+        # Add a title
+        title = ax.set_title(f"Regional thresholds")
+        map_saving_path = self.saving_path / f"threshold.png"
+        plt.savefig(map_saving_path)
+        print("Plot saved")
+        # Show the plot
+        plt.show()
+
+    def plot_mask(self):
+        mask = self.loader._load_spatial_masking().EVIgapfilled_QCdyn
+        projection = cartopy.crs.PlateCarree()
+
+        # Create the figure and axes
+        fig, ax = plt.subplots(
+            figsize=(12, 5),
+            subplot_kw={"projection": projection},
+        )
+        # adjust the plot
+        plt.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05)
+        # Add coastlines and set global extent
+        ax.coastlines()
+        # ax.add_feature(cartopy.feature.OCEAN, zorder=100, edgecolor="k")
+        # Plot the RGB data
+        img_extent = (
+            mask.longitude.min(),
+            mask.longitude.max(),
+            mask.latitude.min(),
+            mask.latitude.max(),
+        )
+        ax.set_extent(img_extent, crs=projection)
+        print(
+            mask.values.shape, mask.longitude.values.shape, mask.latitude.values.shape
+        )
+        im = ax.pcolormesh(
+            mask.longitude.values,
+            mask.latitude.values,
+            mask.values.T,
+            transform=projection,
+            cmap="viridis",
+            # vmin=-0.15,
+            # vmax=0.15,
+        )
+        # Add a colorbar
+        cbar = plt.colorbar(im, ax=ax, orientation="vertical", pad=0.08)
+        cbar.set_label(f"Threshold")
+        # Add a title
+        title = ax.set_title(f"Regional thresholds")
+        map_saving_path = self.saving_path / f"mask.png"
+        plt.savefig(map_saving_path)
+        print("Plot saved")
+        # Show the plot
+        plt.show()
+
+    def barplot_error_thresholds(self):
+        args = parser_arguments().parse_args()
+
+        args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-10-01_14:52:57_eco_threshold_2000"
+        config = InitializationConfig(args)
+        threshold = self.loader._load_thresholds().__xarray_dataarray_variable__
 
 
 if __name__ == "__main__":
     args = parser_arguments().parse_args()
 
-    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-10-02_15:04:53_eco_threshold_uniform_2000"
+    args.path_load_experiment = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2024-10-10_13:37:49_eco_threshold_local_2000_test"
     config = InitializationConfig(args)
     # loader = Loader(config)
     # print(loader._load_pca_matrix().explained_variance_ratio_)
@@ -966,14 +1067,15 @@ if __name__ == "__main__":
     # indices = np.array([9, 1, 2])
     # plot.region(indices=indices)
     # indices = np.array([12, 1, 1])
-    # plot.region(indices=indices)
-    # plot.distribution_per_region()
+    # plot.region(indices=indices)load_thresholds().__xarray_dataarray_variable__
 
     # plot.region_distribution()
     # plot.map_modis()
     # plot.map_bins()
     # plot.threshold_time_serie()
-    plot.check_number(config)
+    # plot.check_number(config, "2018-08-15")
+    # plot.threshold()
+    plot.plot_mask()
     # plot.extremes_plots("2022-08-15")
     # plot.extremes_plots("2021-08-15")
     # plot.extremes_plots("2020-08-15")

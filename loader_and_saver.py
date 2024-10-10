@@ -54,6 +54,19 @@ class Loader:
         else:
             return pca_projection
 
+    def _load_spatial_masking(self):
+        """Saves the extremes quantile to a file."""
+        mask_path = self.config.saving_path / "mask.zarr"
+
+        if not os.path.exists(mask_path):
+            printt(f"The file {mask_path} not found.")
+            return None
+        mask = xr.open_zarr(mask_path)
+        # Unstack location for longitude and latitude as dimensions
+        # mask = mask.stack(location=["longitude", "latitude"])
+        printt("Mask loaded.")
+        return mask
+
     def _load_limits_bins(self) -> list[np.ndarray]:
         """Loads the limits bins from a file."""
         limits_bins_path = self.config.saving_path / "limits_bins.npz"
@@ -109,6 +122,14 @@ class Loader:
         printt("Extremes loaded.")
         return extremes
 
+    def _load_min_max_data(self):
+        """
+        Load min-max data from the file.
+        """
+        min_max_data_path = self.config.saving_path / "min_max_data.zarr"
+        min_max_data = xr.open_zarr(min_max_data_path)
+        return min_max_data
+
 
 class Saver:
     def __init__(
@@ -116,6 +137,22 @@ class Saver:
         config: InitializationConfig,
     ):
         self.config = config
+
+    def _save_minmax_data(self, max_data, min_data, coords):
+        min_max_data_path = self.config.saving_path / "min_max_data.zarr"
+        # Save min_data and max_data
+        if not min_max_data_path.exists():
+            min_max_data = xr.Dataset(
+                {
+                    "max_data": max_data,
+                    "min_data": min_data,
+                },
+                coords={"dayofyear": coords},
+            )
+            min_max_data.to_zarr(min_max_data_path)
+            printt("Min and max data saved.")
+        else:
+            return None
 
     def _save_pca_model(self, pca):
         # Save the PCA model
@@ -211,6 +248,7 @@ class Saver:
         thresholds = thresholds.set_index(location=["longitude", "latitude"]).unstack(
             "location"
         )
+        thresholds.name = "threshold"
 
         thresholds_path = self.config.saving_path / "thresholds.zarr"
         if os.path.exists(thresholds_path):
@@ -234,3 +272,14 @@ class Saver:
             )
         extremes.to_zarr(extremes_path)
         printt("Extremes computed and saved.")
+
+    def _save_spatial_masking(self, mask):
+        mask = mask.set_index(location=["longitude", "latitude"]).unstack("location")
+
+        mask_path = self.config.saving_path / "mask.zarr"
+        if os.path.exists(mask_path):
+            raise FileExistsError(
+                f"The file {mask_path} already exists. Rewriting is not allowed."
+            )
+        mask.to_zarr(mask_path)
+        printt("Mask computed and saved.")

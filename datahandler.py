@@ -10,6 +10,7 @@ import sys
 from typing import Union
 from abc import ABC, abstractmethod
 from config import InitializationConfig, CLIMATIC_INDICES, ECOLOGICAL_INDICES
+from loader_and_saver import Loader, Saver
 
 np.set_printoptions(threshold=sys.maxsize)
 from utils import printt
@@ -43,13 +44,26 @@ class DatasetHandler(ABC):
         n_samples (Union[int, None]): Number of samples to select.
         time_resolution (int, optional): temporal resolution of the msc, to reduce computationnal workload. Defaults to 5.
         """
+        # Config class to deal with loading and saving the model.
         self.config = config
+        # Number of samples to load. If None, the full dataset is loaded.
         self.n_samples = n_samples
+        # Loader class to load intermediate steps.
+        self.loader = Loader(config)
+        # Saver class to save intermediate steps.
+        self.saver = Saver(config)
 
+        # data loaded from the dataset
+        self.data = None
+        # Mean seasonal cycle
+        self.msc = None
+
+        # minimum and maximum of the data for normalization
         self.max_data = None
         self.min_data = None
-        self.data = None
-        self.variable = None
+
+        # Spatial masking. Stay None if precomputed.
+        self.compute_spatial_masking = None
 
     def preprocess_data(
         self,
@@ -62,7 +76,7 @@ class DatasetHandler(ABC):
         Preprocess data based on the index.
         """
         self._dataset_specific_loading()
-        self.filter_dataset()
+        self.filter_dataset_specific()
         # Stack the dimensions
         self.data = self.data.stack(location=("longitude", "latitude"))
 
@@ -75,49 +89,59 @@ class DatasetHandler(ABC):
                 f"Computation on the entire dataset. {self.data.sizes['location']} samples"
             )
 
-        self.compute_variable()
+        self.compute_msc()
 
         if reduce_temporal_resolution:
             self._reduce_temporal_resolution()
 
-        if remove_nan and not self.n_samples:
+        if (
+            remove_nan
+            and not self.n_samples
+            and isinstance(self.spatial_masking, xr.DataArray)
+        ):
             self._remove_nans()
 
         if scale:
-            self._scale_variable()
+            self._scale_msc()
 
-        self.variable = self.variable.transpose("location", "dayofyear", ...)
+        self.msc = self.msc.transpose("location", "dayofyear", ...)
 
         if return_time_serie:
             self.data = self.data.transpose("location", "time", ...)
-            return self.variable, self.data
+            return self.msc, self.data
         else:
-            return self.variable
+            return self.msc
 
     @abstractmethod
     def _dataset_specific_loading(self, *args, **kwargs):
         pass
 
     @abstractmethod
-    def filter_dataset(self, *args, **kwargs):
+    def filter_dataset_specific(self, *args, **kwargs):
         pass
 
     def _spatial_filtering(self, data):
-        # Filter data from the polar regions
-        data = data.where(np.abs(data.latitude) <= NORTH_POLE_THRESHOLD, drop=True)
-        data = data.where(np.abs(data.latitude) >= SOUTH_POLE_THRESHOLD, drop=True)
+        mask = self.loader._load_spatial_masking()  # return None if no mask available
+        if mask:
+            self.data = data.where(mask, drop=True)
+            return self.data
+        else:
+            # Filter data from the polar regions
+            remove_poles = np.abs(data.latitude) <= NORTH_POLE_THRESHOLD
 
-        # Filter dataset to select Europe
-        # Select European data
-        in_europe = self._is_in_europe(data.longitude, data.latitude)
-        data = data.where(in_europe, drop=True)
-        printt("Data filtred to Europe.")
+            # Filter dataset to select Europe
+            # Select European data
+            in_europe = self._is_in_europe(data.longitude, data.latitude)
+            printt("Data filtred to Europe.")
 
-        data = self._is_land(data)
-        printt("Data filtred to land.")
-        return data
+            in_land = self._is_in_land(data)
 
-    def _is_land(self, data):
+            self.spatial_masking = remove_poles & in_europe & in_land
+
+            self.data = data.where(self.spatial_masking, drop=True)
+            return self.data
+
+    def _is_in_land(self, data):
         # Create a land mask
         land = regionmask.defined_regions.natural_earth_v5_0_0.land_110
         mask = land.mask(data.longitude, data.latitude).astype(bool)
@@ -125,9 +149,12 @@ class DatasetHandler(ABC):
         # Mask the ocean
         mask = ~mask
 
-        # Apply the mask to filter out ocean locations
-        data = data.where(mask, drop=True)
-        return data
+        return mask
+
+    @abstractmethod
+    def _remove_low_vegetation_location(self, data):
+        # This method will be implemented by subclasses
+        pass
 
     def randomly_select_n_samples(self, factor=5):
         """
@@ -176,7 +203,7 @@ class DatasetHandler(ABC):
         )
         return in_europe
 
-    def compute_variable(self):
+    def compute_msc(self):
         """
         Compute the Mean Seasonal Cycle (MSC) and optionally the Variance Seasonal Cycle (VSC)
         of n samples and scale it between 0 and 1.
@@ -189,10 +216,10 @@ class DatasetHandler(ABC):
 
         if self.config.compute_variance:
             vsc = self._compute_vsc()
-            self.variable = self._combine_msc_vsc(msc, vsc)
+            self.msc = self._combine_msc_vsc(msc, vsc)
             printt("Variance is computed.")
         else:
-            self.variable = msc
+            self.msc = msc
         self._rechunk_data()
 
     def _compute_msc(self):
@@ -211,67 +238,49 @@ class DatasetHandler(ABC):
         return msc_vsc.assign_coords(dayofyear=("dayofyear", range(total_days)))
 
     def _rechunk_data(self):
-        self.variable = self.variable.chunk(
-            {"dayofyear": len(self.variable.dayofyear), "location": 1}
-        )
+        self.msc = self.msc.chunk({"dayofyear": len(self.msc.dayofyear), "location": 1})
 
     def _remove_nans(self):
-        condition = ~self.variable.isnull().any(dim="dayofyear").compute()
-        self.variable = self.variable.where(condition, drop=True)
+        # if self.spatial_masking is None, location with NaN already have removed using the precomputed mask.
+        not_low_vegetation = self._remove_low_vegetation_location(0.1, self.msc)
+        condition = ~self.msc.isnull().any(dim="dayofyear")
+        self.msc = self.msc.where((condition & not_low_vegetation).compute(), drop=True)
+        self.saver._save_spatial_masking(
+            condition & not_low_vegetation  # & self.spatial_masking
+        )
         printt("NaNs removed.")
 
     def _reduce_temporal_resolution(self):
-        self.variable = self.variable.isel(
-            dayofyear=slice(
-                2, len(self.variable.dayofyear) - 1, self.config.time_resolution
-            )
+        # first day and last day are removed due to error in the original data.
+        self.msc = self.msc.isel(
+            dayofyear=slice(2, len(self.msc.dayofyear) - 1, self.config.time_resolution)
         )
 
     def _get_min_max_data(self):
-        min_max_data_path = self.config.saving_path / "min_max_data.zarr"
-        if min_max_data_path.exists():
-            self._load_min_max_data(min_max_data_path)
+        minmax_data = self.loader._load_min_max_data(min_max_data_path)
+        if isinstance(minmax_data, xr.DataArray):
+            self.min_data = min_max_data.min_data
+            self.max_data = min_max_data.max_data
         else:
-            self._compute_and_save_min_max_data(min_max_data_path)
+            self._compute_and_save_min_max_data()
 
-    def _compute_and_save_min_max_data(self, min_max_data_path):
+    def _compute_and_save_min_max_data(self):
         assert (
             self.max_data and self.min_data
         ) is None, "the min and max of the data are already defined."
         assert self.config.path_load_experiment is None, "A model is already loaded."
 
-        self.max_data = self.variable.max(dim=["location"])
-        self.min_data = self.variable.min(dim=["location"])
+        self.max_data = self.msc.max(dim=["location"])
+        self.min_data = self.msc.min(dim=["location"])
         # Save min_data and max_data
-        if not min_max_data_path.exists():
-            min_max_data = xr.Dataset(
-                {
-                    "max_data": self.max_data,
-                    "min_data": self.min_data,
-                },
-                coords={"dayofyear": self.variable.coords["dayofyear"].values},
-            )
-            min_max_data.to_zarr(min_max_data_path)
-            printt("Min and max data saved.")
-        else:
-            raise FileNotFoundError(f"{min_max_data_path} already exist.")
-
-    def _load_min_max_data(self, min_max_data_path):
-        """
-        Load min-max data from the file.
-        """
-        min_max_data = xr.open_zarr(min_max_data_path)
-        self.min_data = min_max_data.min_data
-        self.max_data = min_max_data.max_data
-
-    def _scale_variable(self):
-        self._get_min_max_data()
-        self.variable = (self.min_data - self.variable) / (
-            self.max_data - self.min_data
-        ) + 1e-8
-        self.variable = self.variable.chunk(
-            {"dayofyear": len(self.variable.dayofyear), "location": 1}
+        self.saver._save_minmax_data(
+            self.max_data, self.min_data, self.msc.coords["dayofyear"].values
         )
+
+    def _scale_msc(self):
+        self._get_min_max_data()
+        self.msc = (self.min_data - self.msc) / (self.max_data - self.min_data) + 1e-8
+        self.msc = self.msc.chunk({"dayofyear": len(self.msc.dayofyear), "location": 1})
         printt("Data are scaled between 0 and 1.")
 
     def _deseasonalize(self, subset_data, subset_msc):
@@ -328,7 +337,7 @@ class ClimaticDatasetHandler(DatasetHandler):
         """Transform the longitude coordinates from between 0 and 360 to between -180 and 180."""
         return ((x + 180) % 360) - 180
 
-    def filter_dataset(self):
+    def filter_dataset_specific(self):
         """
         Apply climatic transformations using xarray.apply_ufunc.
         """
@@ -355,6 +364,11 @@ class ClimaticDatasetHandler(DatasetHandler):
         self.data = self._spatial_filtering(self.data)
 
         printt(f"Climatic data loaded with dimensions: {self.data.sizes}")
+
+    @abstractmethod
+    def _remove_low_vegetation_location(self, data):
+        # not applicable to this dataset
+        return data
 
 
 class EcologicalDatasetHandler(DatasetHandler):
@@ -411,7 +425,7 @@ class EcologicalDatasetHandler(DatasetHandler):
             f"Reduce the resolution from ({res_lat}, {res_lon}) to ({len(self.data.latitude)}, {len(self.data.longitude)})."
         )
 
-    def filter_dataset(self):
+    def filter_dataset_specific(self):
         """
         Standarize the ecological xarray. Remove irrelevant area, and reshape for the PCA.
         """
@@ -434,3 +448,12 @@ class EcologicalDatasetHandler(DatasetHandler):
         self.data = self._spatial_filtering(self.data)
 
         printt(f"Ecological data loaded with dimensions: {self.data.sizes}")
+
+    def _remove_low_vegetation_location(self, threshold, msc):
+        # Calculate mean data across the dayofyear dimension
+        mean_msc = msc.mean("dayofyear", skipna=True)
+
+        # Create a boolean mask for locations where mean is greater than or equal to the threshold
+        mask = mean_msc >= threshold
+
+        return mask
