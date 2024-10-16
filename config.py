@@ -47,7 +47,7 @@ class InitializationConfig:
         self.index = args.index
         self.compute_variance = args.compute_variance
         self.k_pca = args.k_pca
-        self.is_generic_xarray_dataset = args.in_memory_dataset != None
+        self.is_generic_xarray_dataset = args.is_generic_xarray_dataset != None
         
         if self.is_generic_xarray_dataset:
             return
