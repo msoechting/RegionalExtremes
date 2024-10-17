@@ -50,6 +50,8 @@ class InitializationConfig:
         self.is_generic_xarray_dataset = args.is_generic_xarray_dataset != None
         
         if self.is_generic_xarray_dataset:
+            initialize_logger("", False)
+            self.data = args.data
             return
 
         self._set_saving_path(args)

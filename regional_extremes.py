@@ -385,6 +385,7 @@ class RegionalExtremes:
 
         compute_only_thresholds = self.config.is_generic_xarray_dataset
 
+        printt("Computing thresholds...")
         # Apply the quantile calculation to each location
         results = self._compute_thresholds(
             deseasonalized=deseasonalized,
@@ -544,14 +545,18 @@ def local_extremes_method(args, quantile_levels):
 
     dataset_processor = create_handler(config=config, n_samples=None)  # all the dataset
 
+    printt("Preprocessing data...")
     msc, data = dataset_processor.preprocess_data(
         scale=False,
         return_time_serie=True,
         reduce_temporal_resolution=False,
         remove_nan=False,
     )
+    printt("Preprocessing done.")
     # Deseasonalized data
+    printt("Deseasonalizing data...")
     deseasonalized = dataset_processor._deseasonalize(data, msc)
+    printt("Deseasonalizing done.")
     # Apply the local threshold
     extremes_processor.apply_local_threshold(deseasonalized, quantile_levels)
     
@@ -559,19 +564,19 @@ def local_extremes_method(args, quantile_levels):
 
 
 def get_thresholds_from_generic_xarray_dataset(data: xr.Dataset, quantile_levels: tuple[float, float], method: str) -> xr.Dataset:
-    args = {
-        "is_generic_xarray_dataset": True,
-        "in_memory_results": True,
-        "data": data,
-        "index": None,
-        "name": "test",
-        "k_pca": False,
-        "n_samples": 1000,
-        "n_components": 2,
-        "n_bins": 50,
-        "compute_variance": False, 
-        "path_load_experiment": None
-    }
+    args = parser_arguments().parse_args()
+    args.is_generic_xarray_dataset = True
+    args.in_memory_results = True
+    args.data = data
+    args.index = None
+    args.name = "test"
+    args.k_pca = False
+    args.n_samples = 1000
+    args.n_components = 2
+    args.n_bins = 50
+    args.compute_variance = False
+    args.path_load_experiment = None
+    
     if method == "regional":
         p = regional_extremes_method(args, quantile_levels)
         return p.saver.thresholds

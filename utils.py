@@ -11,12 +11,18 @@ def int_or_none(value):
 
 
 class Logger:
-    def __init__(self, filepath: str = "log.txt"):
+    def __init__(self, filepath: str = "log.txt", write_to_file: bool = True):
+        self.write_to_file = write_to_file
+
+        if not self.write_to_file:
+            return
+        
         self.filepath = filepath / "log.txt"
 
         # Ensure the log file exists
         self.filepath.parent.mkdir(parents=True, exist_ok=True)
         self.filepath.touch(exist_ok=True)
+
 
     def printt(self, message: str):
         """
@@ -30,8 +36,9 @@ class Logger:
         print(formatted_message)
 
         # Append to file
-        with open(self.filepath, "a") as file:
-            file.write(formatted_message + "\n")
+        if self.write_to_file:
+            with open(self.filepath, "a") as file:
+                file.write(formatted_message + "\n")
 
     def raiset(self, error):
         """
@@ -44,9 +51,10 @@ class Logger:
         # Print to console
         print(formatted_message)
 
-        # Append to file
-        with open(self.filepath, "a") as file:
-            file.write(formatted_message + "\n")
+        if self.write_to_file:
+            # Append to file
+            with open(self.filepath, "a") as file:
+                file.write(formatted_message + "\n")
 
         raise error
 
@@ -55,9 +63,9 @@ class Logger:
 logger = None
 
 
-def initialize_logger(filepath: str = "log.txt"):
+def initialize_logger(filepath: str = "log.txt", write_to_file: bool = True):
     global logger
-    logger = Logger(filepath)
+    logger = Logger(filepath, write_to_file)
 
 
 def printt(message: str):

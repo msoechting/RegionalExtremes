@@ -67,6 +67,9 @@ class DatasetHandler(ABC):
         # Spatial masking. Stay None if precomputed.
         self.compute_spatial_masking = None
 
+        self.y_dim_name = "latitude"
+        self.x_dim_name = "longitude"
+
     def preprocess_data(
         self,
         scale=True,
@@ -80,13 +83,14 @@ class DatasetHandler(ABC):
         self._dataset_specific_loading()
         self.filter_dataset_specific()
         # Stack the dimensions
-        self.data = self.data.stack(location=("longitude", "latitude"))
+        self.data = self.data.stack(location=(self.x_dim_name, self.y_dim_name))
 
         # Select only a subset of the data if n_samples is specified
         if self.n_samples:
             self.randomly_select_n_samples()
         else:
-            self.data = self.data[self.variable_name]
+            if isinstance(self.data, xr.Dataset):
+                self.data = self.data[self.variable_name]
             printt(
                 f"Computation on the entire dataset. {self.data.sizes['location']} samples"
             )
@@ -213,6 +217,7 @@ class DatasetHandler(ABC):
         Time resolution reduces the resolution of the MSC to decrease computation workload.
         Number of values = 366 / time_resolution.
         """
+        printt("Computing MSC...")
         msc = self._compute_msc()
         printt("MSC computed.")
 
@@ -225,7 +230,7 @@ class DatasetHandler(ABC):
         self._rechunk_data()
 
     def _compute_msc(self):
-        return self.data.groupby("time.dayofyear").mean("time", skipna=True)
+        return self.data.groupby("time.dayofyear").mean("time", skipna=True).compute()
 
     def _compute_vsc(self):
         return (
@@ -285,7 +290,7 @@ class DatasetHandler(ABC):
         self.msc = self.msc.chunk({"dayofyear": len(self.msc.dayofyear), "location": 1})
         printt("Data are scaled between 0 and 1.")
 
-    def _deseasonalize(self, subset_data, subset_msc):
+    def _deseasonalize(self, subset_data, subset_msc): # TODO: slow and flooding memory. turn into out-of-core, better parallelization
         # Align subset_msc with subset_data
         aligned_msc = subset_msc.sel(dayofyear=subset_data["time.dayofyear"])
         # Subtract the seasonal cycle
@@ -461,6 +466,13 @@ class EcologicalDatasetHandler(DatasetHandler):
         return mask
 
 class GenericDatasetHandler(DatasetHandler):
+    def __init__(self, config: InitializationConfig, n_samples: Union[int, None]):
+        super().__init__(config, n_samples)
+
+        self.x_dim_name = config.data.dims[2]
+        self.y_dim_name = config.data.dims[1]
+        print("Initialized GenericDatasetHandler, dimension names", self.x_dim_name, self.y_dim_name)
+
     def _dataset_specific_loading(self):
         """
         Preprocess data based on the index.
@@ -475,9 +487,9 @@ class GenericDatasetHandler(DatasetHandler):
         assert self.data is not None, "Data not loaded."
 
         # Assert dimensions are as expected after loading and transformation
-        assert all(
-            dim in self.data.sizes for dim in ("time", "latitude", "longitude")
-        ), "Dimension missing"
+        # assert all(
+        #     dim in self.data.sizes for dim in ("time", "latitude", "longitude")
+        # ), "Dimension missing"
 
     def _remove_low_vegetation_location(self, threshold, msc):
         # Calculate mean data across the dayofyear dimension
